@@ -450,11 +450,12 @@ function updateUI(){
 function computeCalibration(){
   var rimMm=parseFloat(rimMmInput.value),zMm=parseFloat(zMmInput.value);
   if(!rimMm||rimMm<=0||refPoints.length<2)return false;
-  var sc=parseFloat(imgCanvas.dataset.scale)||1;
-  var rimPx=ptDist(refPoints[0],refPoints[1])/sc;
+  // Convert canvas pixel distances to image pixel distances
+  var rx=img?img.width/imgCanvas.width:1;
+  var rimPx=ptDist(refPoints[0],refPoints[1])*rx;
   pxPerMmRim=rimPx/rimMm;
   if(zMm>0&&heightPoints.length===2){
-    var deltaPx=ptDist(heightPoints[0],heightPoints[1])/sc;
+    var deltaPx=ptDist(heightPoints[0],heightPoints[1])*rx;
     cameraHeightMm=zMm*(rimPx/2)/deltaPx; zDepthMm=zMm;
     pxPerMmFroth=pxPerMmRim*cameraHeightMm/(cameraHeightMm+zMm);
   }else if(zMm>0){
@@ -476,18 +477,18 @@ function showCorrBox(){
 
 // ── Redraw ────────────────────────────────────────────────────────────────────
 function redraw(){
-  var sc=parseFloat(imgCanvas.dataset.scale)||1;
   ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
+  // Ratio to convert canvas coords → image source coords
+  var rx = img.width  / imgCanvas.width;
+  var ry = img.height / imgCanvas.height;
 
   if(roi){
-    // roi is in canvas pixel coords; image source coords = canvas coords / sc
     ctx.save();
     ctx.fillStyle='rgba(0,0,0,.5)';
     ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
-    // Draw the unmasked region from the original image
     ctx.drawImage(img,
-      roi.x/sc, roi.y/sc, roi.w/sc, roi.h/sc,  // source (image pixels)
-      roi.x,    roi.y,    roi.w,    roi.h);       // dest   (canvas pixels)
+      roi.x*rx, roi.y*ry, roi.w*rx, roi.h*ry,  // source: image pixels
+      roi.x,    roi.y,    roi.w,    roi.h);       // dest:   canvas pixels
     ctx.strokeStyle='#f5c842'; ctx.lineWidth=2; ctx.setLineDash([6,3]);
     ctx.strokeRect(roi.x,roi.y,roi.w,roi.h); ctx.setLineDash([]);
     ctx.font='bold 11px system-ui'; ctx.fillStyle='#f5c842';
@@ -570,9 +571,15 @@ function resetAll(){
 // ── Analysis ──────────────────────────────────────────────────────────────────
 function runAnalysis(){
   if(!img||!pxPerMmFroth)return;
-  var sc=parseFloat(imgCanvas.dataset.scale)||1;
+  var rx=img.width/imgCanvas.width;
+  var ry=img.height/imgCanvas.height;
   var srcX=0,srcY=0,srcW=img.width,srcH=img.height;
-  if(roi){srcX=Math.round(roi.x/sc);srcY=Math.round(roi.y/sc);srcW=Math.min(Math.round(roi.w/sc),img.width-srcX);srcH=Math.min(Math.round(roi.h/sc),img.height-srcY);}
+  if(roi){
+    srcX=Math.round(roi.x*rx);
+    srcY=Math.round(roi.y*ry);
+    srcW=Math.min(Math.round(roi.w*rx), img.width-srcX);
+    srcH=Math.min(Math.round(roi.h*ry), img.height-srcY);
+  }
   var off=document.createElement('canvas');off.width=srcW;off.height=srcH;
   var oc=off.getContext('2d');oc.drawImage(img,srcX,srcY,srcW,srcH,0,0,srcW,srcH);
   var id=oc.getImageData(0,0,srcW,srcH).data;
