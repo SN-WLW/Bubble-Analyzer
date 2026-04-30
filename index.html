@@ -205,7 +205,6 @@
   <div class="mode-row">
     <div class="mode-btn m-blue" id="modeRefBtn" onclick="setMode('ref')">Rim reference<br>(click A then B)</div>
     <div class="mode-btn" id="modeRoiBtn" onclick="setMode('roi')">Sample region<br>(drag rectangle)</div>
-    <div class="mode-btn" id="modeHeightBtn" onclick="setMode('height')">Froth depth Z<br>(click rim then froth)</div>
   </div>
   <div style="border-radius:8px;overflow:hidden;margin-top:12px">
     <canvas id="imgCanvas"></canvas>
@@ -214,7 +213,6 @@
     <span class="badge pulse-blue" id="p1badge">Rim A: not set</span>
     <span class="badge" id="p2badge">Rim B: not set</span>
     <span class="badge" id="roiBadge">Sample region: not set</span>
-    <span class="badge" id="htBadge">Froth depth Z: not set</span>
   </div>
   <p class="hint blue" id="clickHint">Click Rim Point A on the cup rim</p>
   <hr class="div">
@@ -225,9 +223,8 @@
       <input type="number" id="rimMmInput" placeholder="real distance (mm)" min="0.1" step="0.1">
     </div>
     <div class="input-group">
-      <label>Froth depth Z below rim</label>
-      <div class="px-val" id="zPxDisplay">— px</div>
-      <input type="number" id="zMmInput" placeholder="real Z depth (mm)" min="0.1" step="0.1">
+      <label>Froth depth Z below rim (mm)</label>
+      <input type="number" id="zMmInput" placeholder="e.g. 15" min="0.1" step="0.1">
     </div>
     <div class="input-group">
       <label>Liquid column height (optional)</label>
@@ -300,8 +297,8 @@
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
-var img=null, refPoints=[], heightPoints=[], roi=null;
-var mode='ref', refClickState=1, htClickState=0;
+var img=null, refPoints=[], roi=null;
+var mode='ref', refClickState=1;
 var roiDragging=false, roiStart=null, roiCurrent=null;
 var pxPerMmRim=null, pxPerMmFroth=null, cameraHeightMm=null, zDepthMm=null, liquidHeightMm=null;
 var lastStats=null;
@@ -355,8 +352,8 @@ function loadFile(file){
       imgCanvas.width=maxW; imgCanvas.height=Math.round(img.height*sc);
       imgCanvas.dataset.scale=sc;
       ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
-      refPoints=[]; heightPoints=[]; roi=null; roiStart=null; roiCurrent=null;
-      mode='ref'; refClickState=1; htClickState=0;
+      refPoints=[]; roi=null; roiStart=null; roiCurrent=null;
+      mode='ref'; refClickState=1;
       updateModeButtons(); updateUI();
     };
     img.src=e.target.result;
@@ -383,11 +380,6 @@ imgCanvas.addEventListener('mousedown',function(e){
     else if(refClickState===2){refPoints[1]=pos;refClickState=0;}
     else{refPoints=[pos];refClickState=2;}
     redraw();updateUI();checkReady();
-  }else if(mode==='height'){
-    if(htClickState===1){heightPoints[0]=pos;htClickState=2;}
-    else if(htClickState===2){heightPoints[1]=pos;htClickState=0;}
-    else{heightPoints=[pos];htClickState=2;}
-    redraw();updateUI();checkReady();
   }else if(mode==='roi'){
     roiDragging=true;roiStart=pos;roiCurrent=pos;roi=null;
   }
@@ -408,13 +400,11 @@ imgCanvas.addEventListener('mouseleave',function(){if(roiDragging){roiDragging=f
 function setMode(m){
   mode=m;
   if(m==='ref'&&refClickState===0&&refPoints.length<2)refClickState=1;
-  if(m==='height'&&htClickState===0&&heightPoints.length<2)htClickState=1;
   updateModeButtons();updateUI();
 }
 function updateModeButtons(){
   document.getElementById('modeRefBtn').className='mode-btn'+(mode==='ref'?' m-blue':'');
   document.getElementById('modeRoiBtn').className='mode-btn'+(mode==='roi'?' m-yellow':'');
-  document.getElementById('modeHeightBtn').className='mode-btn'+(mode==='height'?' m-pink':'');
 }
 
 // ── UI labels ─────────────────────────────────────────────────────────────────
@@ -422,27 +412,18 @@ function ptDist(a,b){var dx=b.x-a.x,dy=b.y-a.y;return Math.sqrt(dx*dx+dy*dy);}
 function updateUI(){
   var hint=document.getElementById('clickHint');
   var p1b=document.getElementById('p1badge'),p2b=document.getElementById('p2badge');
-  var roiB=document.getElementById('roiBadge'),htB=document.getElementById('htBadge');
+  var roiB=document.getElementById('roiBadge');
   if(mode==='ref'){
     if(refClickState===1){p1b.className='badge pulse-blue';p1b.textContent='Rim A: click rim';p2b.className='badge';p2b.textContent='Rim B: not set';hint.className='hint blue';hint.textContent='Click Point A on the cup rim';}
     else if(refClickState===2){p1b.className='badge set';p1b.textContent='Rim A: set';p2b.className='badge pulse-blue';p2b.textContent='Rim B: click rim';hint.className='hint blue';hint.textContent='Now click Point B on the cup rim';}
-    else{p1b.className='badge set';p1b.textContent='Rim A: set';p2b.className='badge set';p2b.textContent='Rim B: set';hint.className='hint';hint.textContent='Reference set. Enter real distance, then set Z if needed.';}
+    else{p1b.className='badge set';p1b.textContent='Rim A: set';p2b.className='badge set';p2b.textContent='Rim B: set';hint.className='hint';hint.textContent='Reference set. Enter real distance below, then enter Z depth.';}
   }else if(mode==='roi'){
     p1b.className=refPoints[0]?'badge set':'badge';p1b.textContent=refPoints[0]?'Rim A: set':'Rim A: not set';
     p2b.className=refPoints[1]?'badge set':'badge';p2b.textContent=refPoints[1]?'Rim B: set':'Rim B: not set';
     hint.className='hint yellow';hint.textContent='Drag to draw the sample region over the froth area.';
-  }else if(mode==='height'){
-    p1b.className=refPoints[0]?'badge set':'badge';p1b.textContent=refPoints[0]?'Rim A: set':'Rim A: not set';
-    p2b.className=refPoints[1]?'badge set':'badge';p2b.textContent=refPoints[1]?'Rim B: set':'Rim B: not set';
-    if(htClickState===1){hint.className='hint pink';hint.textContent='Click a point at rim level';}
-    else if(htClickState===2){hint.className='hint pink';hint.textContent='Now click a point on the froth surface';}
-    else{hint.className='hint';hint.textContent='Z depth points set. Enter the real depth in mm.';}
   }
   roiB.className=roi?'badge done-yellow':(mode==='roi'?'badge pulse-yellow':'badge');
   roiB.textContent=roi?('Region: '+Math.round(roi.w)+'x'+Math.round(roi.h)+'px'):(mode==='roi'?'Drag to draw':'Sample region: not set');
-  htB.className=heightPoints.length===2?'badge done-pink':(mode==='height'?'badge pulse-pink':'badge');
-  if(heightPoints.length===2){var dpx=Math.round(ptDist(heightPoints[0],heightPoints[1]));htB.textContent='Z: '+dpx+' px';document.getElementById('zPxDisplay').textContent=dpx+' px';}
-  else{htB.textContent=mode==='height'?'Click rim then froth':'Froth depth Z: not set';document.getElementById('zPxDisplay').textContent='— px';}
   if(refPoints.length===2)document.getElementById('rimPxDisplay').textContent=Math.round(ptDist(refPoints[0],refPoints[1]))+' px';
 }
 
@@ -450,15 +431,11 @@ function updateUI(){
 function computeCalibration(){
   var rimMm=parseFloat(rimMmInput.value),zMm=parseFloat(zMmInput.value);
   if(!rimMm||rimMm<=0||refPoints.length<2)return false;
-  // Convert canvas pixel distances to image pixel distances
   var rx=img?img.width/imgCanvas.width:1;
   var rimPx=ptDist(refPoints[0],refPoints[1])*rx;
   pxPerMmRim=rimPx/rimMm;
-  if(zMm>0&&heightPoints.length===2){
-    var deltaPx=ptDist(heightPoints[0],heightPoints[1])*rx;
-    cameraHeightMm=zMm*(rimPx/2)/deltaPx; zDepthMm=zMm;
-    pxPerMmFroth=pxPerMmRim*cameraHeightMm/(cameraHeightMm+zMm);
-  }else if(zMm>0){
+  if(zMm>0){
+    // H estimated as 3x rim diameter — good approximation for phone-over-cup
     cameraHeightMm=rimMm*3; zDepthMm=zMm;
     pxPerMmFroth=pxPerMmRim*cameraHeightMm/(cameraHeightMm+zMm);
   }else{pxPerMmFroth=pxPerMmRim;cameraHeightMm=null;zDepthMm=0;}
@@ -506,27 +483,6 @@ function redraw(){
     ctx.restore();
   }
 
-  if(heightPoints.length>=1){
-    ctx.save();
-    for(var i=0;i<heightPoints.length;i++){
-      var p=heightPoints[i];
-      ctx.beginPath(); ctx.arc(p.x,p.y,6,0,2*Math.PI);
-      ctx.fillStyle='#e07ab0'; ctx.fill();
-      ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
-      ctx.fillStyle='#fff'; ctx.font='bold 11px system-ui';
-      ctx.fillText(i===0?'Rim':'Froth',p.x+9,p.y+4);
-    }
-    if(heightPoints.length===2){
-      ctx.beginPath(); ctx.moveTo(heightPoints[0].x,heightPoints[0].y);
-      ctx.lineTo(heightPoints[1].x,heightPoints[1].y);
-      ctx.strokeStyle='rgba(224,122,176,.6)'; ctx.lineWidth=1.5;
-      ctx.setLineDash([4,3]); ctx.stroke(); ctx.setLineDash([]);
-      ctx.font='11px system-ui'; ctx.fillStyle='#e07ab0';
-      ctx.fillText('Z depth',(heightPoints[0].x+heightPoints[1].x)/2+8,(heightPoints[0].y+heightPoints[1].y)/2);
-    }
-    ctx.restore();
-  }
-
   if(refPoints.length>=1){
     var cols=['#5a9cf5','#f5a05a'];
     for(var i=0;i<refPoints.length;i++){
@@ -548,17 +504,15 @@ function redraw(){
 
 // ── Reset ─────────────────────────────────────────────────────────────────────
 function resetAll(){
-  img=null;refPoints=[];heightPoints=[];roi=null;
+  img=null;refPoints=[];roi=null;
   pxPerMmRim=null;pxPerMmFroth=null;cameraHeightMm=null;zDepthMm=null;liquidHeightMm=null;lastStats=null;
-  roiStart=null;roiCurrent=null;mode='ref';refClickState=1;htClickState=0;
+  roiStart=null;roiCurrent=null;mode='ref';refClickState=1;
   document.getElementById('fileInput').value='';
   document.getElementById('calibCard').style.display='none';
   document.getElementById('resultsCard').className='card results';
   document.getElementById('saveBar').className='save-bar';
   document.getElementById('saveLabel').value='';
   document.getElementById('rimPxDisplay').textContent='— px';
-  document.getElementById('zPxDisplay').textContent='— px';
-  document.getElementById('htPxDisplay').textContent='—';
   rimMmInput.value='';zMmInput.value='';htMmInput.value='';
   runBtn.disabled=true;
   document.getElementById('resetBtn').style.display='none';
