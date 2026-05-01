@@ -11,6 +11,14 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Bubble Size Analyzer</title>
+<script>
+// Force unregister all service workers so fresh code always loads
+if('serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then(function(regs) {
+    regs.forEach(function(r) { r.unregister(); });
+  });
+}
+</script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:system-ui,sans-serif;background:#1a1a1a;color:#e0e0e0;min-height:100vh;padding:24px}
@@ -812,12 +820,12 @@ function downloadImg(idx,type){
   a.href=src; a.download=safeName+suffix+'.jpg'; a.click();
 }
 
-// ── PWA: Service Worker ───────────────────────────────────────────────────────
-if('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('./sw.js').catch(function(e){console.log('SW failed:',e);});
-  });
-}
+// Service worker disabled during debugging
+// if('serviceWorker' in navigator) {
+//   window.addEventListener('load', function() {
+//     navigator.serviceWorker.register('./sw.js').catch(function(e){console.log('SW failed:',e);});
+//   });
+// }
 
 // ── PWA: Install prompt ───────────────────────────────────────────────────────
 var deferredPrompt=null;
