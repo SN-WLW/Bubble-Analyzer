@@ -254,6 +254,10 @@ if('serviceWorker' in navigator) {
     <div class="step-label" style="margin-bottom:8px">Size distribution</div>
     <div id="distBars"></div>
   </div>
+  <div style="margin-bottom:16px">
+    <div class="step-label" style="margin-bottom:8px">Bubble size histogram</div>
+    <canvas id="histChart" style="width:100%;border-radius:8px;background:#1e1e1e;display:block;"></canvas>
+  </div>
   <div class="step-label" style="margin-bottom:8px">Annotated image</div>
   <div class="annotated-wrap"><canvas id="outCanvas"></canvas></div>
   <button id="downloadBtn" onclick="downloadResult()">Download annotated image</button>
@@ -670,6 +674,127 @@ function measureComponents(lab,count,w,h,pxPerMm,offX,offY,scale){
   return res;
 }
 
+// ── Histogram + Bell Curve ────────────────────────────────────────────────────
+function drawHistogram(diams, mean, std) {
+  var canvas = document.getElementById('histChart');
+  var dpr = window.devicePixelRatio || 1;
+  var cssW = canvas.parentElement.getBoundingClientRect().width || 300;
+  var cssH = Math.round(cssW * 0.55);
+  canvas.width  = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  canvas.style.width  = cssW + 'px';
+  canvas.style.height = cssH + 'px';
+  var c = canvas.getContext('2d');
+  c.scale(dpr, dpr);
+
+  var W = cssW, H = cssH;
+  var pad = {top:20, right:20, bottom:36, left:42};
+  var pw = W - pad.left - pad.right;
+  var ph = H - pad.top  - pad.bottom;
+
+  // Build histogram bins
+  var maxD = Math.min(Math.max.apply(null, diams), mean + 4*std);
+  var minD = 0;
+  var nBins = Math.min(40, Math.max(15, Math.round(Math.sqrt(diams.length))));
+  var binW = (maxD - minD) / nBins;
+  var bins = new Array(nBins).fill(0);
+  diams.forEach(function(d) {
+    var i = Math.min(nBins-1, Math.floor((d - minD) / binW));
+    if(i >= 0) bins[i]++;
+  });
+  var maxCount = Math.max.apply(null, bins);
+
+  // Background
+  c.fillStyle = '#1e1e1e';
+  c.fillRect(0, 0, W, H);
+
+  // Grid lines
+  c.strokeStyle = '#2a2a2a';
+  c.lineWidth = 1;
+  for(var gi=0; gi<=4; gi++) {
+    var gy = pad.top + ph - (gi/4)*ph;
+    c.beginPath(); c.moveTo(pad.left, gy); c.lineTo(pad.left+pw, gy); c.stroke();
+  }
+
+  // Histogram bars
+  var barGap = 1;
+  bins.forEach(function(count, i) {
+    var x = pad.left + (i/nBins)*pw;
+    var bw = pw/nBins - barGap;
+    var bh = (count/maxCount)*ph;
+    var t = 1 - count/maxCount; // 0=tall(blue), 1=short(darker)
+    var r = Math.round(90 + t*30), g = Math.round(156 + t*20), b = Math.round(245);
+    c.fillStyle = 'rgba('+r+','+g+','+b+',0.75)';
+    c.fillRect(x+barGap/2, pad.top+ph-bh, bw, bh);
+  });
+
+  // Normal (bell) curve overlay
+  function normalPDF(x, mu, sigma) {
+    return (1/(sigma*Math.sqrt(2*Math.PI))) * Math.exp(-0.5*Math.pow((x-mu)/sigma,2));
+  }
+  // Scale: peak of normal = maxCount/binW (density → count)
+  var pdfScale = maxCount / normalPDF(mean, mean, std) / binW;
+  c.beginPath();
+  c.strokeStyle = '#f5c842';
+  c.lineWidth = 2;
+  for(var xi=0; xi<=pw; xi++) {
+    var xVal = minD + (xi/pw)*(maxD-minD);
+    var yVal = normalPDF(xVal, mean, std) * pdfScale;
+    var cx2 = pad.left + xi;
+    var cy2 = pad.top + ph - (yVal/maxCount)*ph;
+    if(xi===0) c.moveTo(cx2, cy2); else c.lineTo(cx2, cy2);
+  }
+  c.stroke();
+
+  // Mean line
+  var meanX = pad.left + ((mean-minD)/(maxD-minD))*pw;
+  c.strokeStyle = 'rgba(245,200,66,0.5)';
+  c.lineWidth = 1;
+  c.setLineDash([4,3]);
+  c.beginPath(); c.moveTo(meanX, pad.top); c.lineTo(meanX, pad.top+ph); c.stroke();
+  c.setLineDash([]);
+
+  // ±1 std shading
+  var s1x = pad.left + Math.max(0,((mean-std-minD)/(maxD-minD)))*pw;
+  var s2x = pad.left + Math.min(pw,((mean+std-minD)/(maxD-minD)))*pw;
+  c.fillStyle = 'rgba(245,200,66,0.06)';
+  c.fillRect(s1x, pad.top, s2x-s1x, ph);
+
+  // X axis labels
+  c.fillStyle = '#666';
+  c.font = (10*dpr > 14 ? '10' : '10') + 'px system-ui';
+  c.textAlign = 'center';
+  for(var li=0; li<=4; li++) {
+    var lx = pad.left + (li/4)*pw;
+    var lv = minD + (li/4)*(maxD-minD);
+    c.fillText(lv.toFixed(2), lx, H-pad.bottom+14);
+  }
+  c.fillStyle = '#555';
+  c.font = '10px system-ui';
+  c.fillText('Diameter (mm)', pad.left+pw/2, H-4);
+
+  // Y axis labels
+  c.textAlign = 'right';
+  for(var yi=0; yi<=4; yi++) {
+    var yLabel = Math.round((yi/4)*maxCount);
+    var yPos = pad.top + ph - (yi/4)*ph;
+    c.fillStyle = '#555';
+    c.fillText(yLabel, pad.left-6, yPos+4);
+  }
+
+  // Legend
+  c.textAlign = 'left';
+  c.fillStyle = '#f5c842';
+  c.fillRect(pad.left+pw-90, pad.top+4, 12, 3);
+  c.fillStyle = '#aaa';
+  c.font = '10px system-ui';
+  c.fillText('Normal curve', pad.left+pw-75, pad.top+8);
+  c.fillStyle = 'rgba(90,156,245,0.75)';
+  c.fillRect(pad.left+pw-90, pad.top+16, 12, 8);
+  c.fillStyle = '#aaa';
+  c.fillText('Bubble count', pad.left+pw-75, pad.top+24);
+}
+
 // ── Show results ──────────────────────────────────────────────────────────────
 function showResults(bubbles){
   var diams=bubbles.map(function(b){return b.eqDiamMm;});
@@ -686,8 +811,11 @@ function showResults(bubbles){
   var verdictClass=mean<0.5&&micro/n>0.7?'good':mean<1.5?'ok':'bad';
   var verdictText=verdictClass==='good'?'Excellent microfoam — predominantly sub-0.5mm bubbles.':verdictClass==='ok'?'Mixed foam — decent but room to improve.':'Large bubbles dominate — steaming technique needs work.';
 
-  // Store stats for saving
-  lastStats={n:n,mean:mean.toFixed(3),median:median.toFixed(3),min:sorted[0].toFixed(3),max:sorted[sorted.length-1].toFixed(3),std:std.toFixed(3),micro:micro,small:small,medium:medium,large:large,verdictClass:verdictClass,verdictText:verdictText,pxPerMmRim:pxPerMmRim?pxPerMmRim.toFixed(3):'',pxPerMmFroth:pxPerMmFroth?pxPerMmFroth.toFixed(3):'',zDepthMm:zDepthMm||0,cameraH:cameraHeightMm?cameraHeightMm.toFixed(1):'',liquidH:liquidHeightMm||'',meanPctH:liquidHeightMm?(mean/liquidHeightMm*100).toFixed(2):'',maxPctH:liquidHeightMm?(sorted[sorted.length-1]/liquidHeightMm*100).toFixed(2):'',timestamp:new Date().toISOString()};
+  // Store stats + full raw diameters for saving and export
+  lastStats={n:n,mean:mean.toFixed(3),median:median.toFixed(3),min:sorted[0].toFixed(3),max:sorted[sorted.length-1].toFixed(3),std:std.toFixed(3),micro:micro,small:small,medium:medium,large:large,verdictClass:verdictClass,verdictText:verdictText,pxPerMmRim:pxPerMmRim?pxPerMmRim.toFixed(3):'',pxPerMmFroth:pxPerMmFroth?pxPerMmFroth.toFixed(3):'',zDepthMm:zDepthMm||0,cameraH:cameraHeightMm?cameraHeightMm.toFixed(1):'',liquidH:liquidHeightMm||'',meanPctH:liquidHeightMm?(mean/liquidHeightMm*100).toFixed(2):'',maxPctH:liquidHeightMm?(sorted[sorted.length-1]/liquidHeightMm*100).toFixed(2):'',timestamp:new Date().toISOString(),diameters:diams.map(function(d){return parseFloat(d.toFixed(4));})};
+
+  // Draw histogram
+  drawHistogram(diams, mean, std);
 
   // Context box
   var chtml='<div class="context-box"><strong>Calibration used</strong><br>px/mm at rim: <strong>'+pxPerMmRim.toFixed(3)+'</strong>';
@@ -905,15 +1033,33 @@ function buildRows(){
   return{headers:headers,rows:rows};
 }
 
+// Build a flat table of every individual bubble reading across all datasets
+function buildDiameterRows(){
+  var headers=['Dataset','Timestamp','Bubble #','Diameter (mm)'];
+  var rows=[];
+  historyLog.forEach(function(e){
+    if(e.diameters&&e.diameters.length){
+      e.diameters.forEach(function(d,i){
+        rows.push([e.label, e.timestamp, i+1, d]);
+      });
+    }
+  });
+  return{headers:headers,rows:rows};
+}
+
 // ── CSV (no images — show warning toast) ─────────────────────────────────────
 function exportCSV(){
   if(!historyLog.length){alert('No data to export.');return;}
   var d=buildRows();
-  var csv=[d.headers.map(function(h){return'"'+h+'"';}).join(',')].concat(d.rows.map(function(r){return r.map(function(v){return'"'+(v===null||v===undefined?'':v)+'"';}).join(',');})).join('\n');
+  var dr=buildDiameterRows();
+  var csv='SUMMARY STATISTICS\n';
+  csv+=[d.headers.map(function(h){return'"'+h+'"';}).join(',')].concat(d.rows.map(function(r){return r.map(function(v){return'"'+(v===null||v===undefined?'':v)+'"';}).join(',');})).join('\n');
+  csv+='\n\nINDIVIDUAL BUBBLE READINGS\n';
+  csv+=[dr.headers.map(function(h){return'"'+h+'"';}).join(',')].concat(dr.rows.map(function(r){return r.map(function(v){return'"'+(v===null||v===undefined?'':v)+'"';}).join(',');})).join('\n');
   var blob=new Blob([csv],{type:'text/csv'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');a.href=url;a.download='bubble_data.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);setTimeout(function(){URL.revokeObjectURL(url);},1000);
-  showToast('CSV exported — note: images are not included in CSV files. Use Excel or PDF to export with images.','warn');
+  showToast('CSV exported — images not included. Use Excel or PDF to export with images.','warn');
 }
 
 // ── XLSX (data only — simple, no image embedding) ─────────────────────────────
@@ -980,10 +1126,13 @@ function exportPDF(){
   }).join('');
 
   var tableRows=([d.headers]).concat(d.rows).map(function(row,ri){
-    var cells=row.map(function(v){
-      var s=String(v===null||v===undefined?'':v);
-      return(ri===0?'<th>':'<td>')+escHtml(s)+(ri===0?'</th>':'</td>');
-    }).join('');
+    var cells=row.map(function(v){var s=String(v===null||v===undefined?'':v);return(ri===0?'<th>':'<td>')+escHtml(s)+(ri===0?'</th>':'</td>');}).join('');
+    return'<tr>'+cells+'</tr>';
+  }).join('');
+
+  var dr=buildDiameterRows();
+  var diamRows=([dr.headers]).concat(dr.rows).map(function(row,ri){
+    var cells=row.map(function(v){var s=String(v===null||v===undefined?'':v);return(ri===0?'<th>':'<td>')+escHtml(s)+(ri===0?'</th>':'</td>');}).join('');
     return'<tr>'+cells+'</tr>';
   }).join('');
 
@@ -1012,8 +1161,10 @@ function exportPDF(){
     +'</style></head><body>'
     +'<h1>Bubble Size Analyzer — Export Report</h1>'
     +'<div class="meta">Generated: '+escHtml(now)+' &nbsp;|&nbsp; '+historyLog.length+' dataset'+(historyLog.length===1?'':'s')+'</div>'
-    +'<h2>Data Table</h2>'
+    +'<h2>Summary Statistics</h2>'
     +'<table>'+tableRows+'</table>'
+    +'<h2>Individual Bubble Readings</h2>'
+    +'<table>'+diamRows+'</table>'
     +'<h2>Images</h2>'
     +imgSections
     +'<script>window.addEventListener("load",function(){setTimeout(function(){window.print();},400);});<\/script>'
