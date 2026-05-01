@@ -348,11 +348,9 @@ function loadFile(file){
       document.getElementById('uploadCard').querySelector('.step-label').textContent='Step 1 — image loaded';
       document.getElementById('resetBtn').style.display='';
       document.getElementById('calibCard').style.display='';
-      // Use the card's width as the canvas width — this is the actual display width
-      // on any device, accounting for screen size, zoom, and DPR automatically
-      var container=document.getElementById('calibCard');
-      var displayW=container.getBoundingClientRect().width - 40; // subtract padding
-      displayW=Math.max(200, Math.min(displayW, img.width)); // clamp
+      // Use window.innerWidth minus padding as the canvas width.
+      // This is the most reliable cross-device measure of actual display width.
+      var displayW=Math.min(window.innerWidth - 48, img.width);
       var displayH=Math.round(displayW * img.height / img.width);
       imgCanvas.width=Math.round(displayW);
       imgCanvas.height=displayH;
@@ -496,21 +494,16 @@ function checkReady(){runBtn.disabled=!computeCalibration();if(!runBtn.disabled)
 function showCorrBox(){
   var box=document.getElementById('correctionBox');
   if(!pxPerMmFroth){box.style.display='none';return;}
-  var pct=((pxPerMmFroth/pxPerMmRim-1)*100).toFixed(2);
   var r=imgCanvas.getBoundingClientRect();
   var rimPx=refPoints.length===2?ptDist(refPoints[0],refPoints[1]).toFixed(1):'?';
-  var html='<strong>Calibration debug</strong><br>'
-    +'Image: <strong>'+img.width+'x'+img.height+'</strong> | '
-    +'Canvas internal: <strong>'+imgCanvas.width+'x'+imgCanvas.height+'</strong> | '
-    +'Canvas display: <strong>'+Math.round(r.width)+'x'+Math.round(r.height)+'</strong><br>'
-    +'DPR: <strong>'+window.devicePixelRatio+'</strong> | '
-    +'Rim span (img-px): <strong>'+rimPx+'</strong> | '
-    +'px/mm rim: <strong>'+pxPerMmRim.toFixed(3)+'</strong><br>'
-    +'A: ('+Math.round(refPoints[0].x)+','+Math.round(refPoints[0].y)+') '
-    +'B: ('+Math.round(refPoints[1].x)+','+Math.round(refPoints[1].y)+')'
-    +'<br>px/mm froth: <strong>'+pxPerMmFroth.toFixed(3)+'</strong>';
-  if(cameraHeightMm&&zDepthMm>0)html+=' | Camera H: <strong>'+cameraHeightMm.toFixed(1)+'mm</strong> | Z: <strong>'+zDepthMm+'mm</strong>';
-  box.innerHTML=html;box.style.display='';
+  var html='<strong>DEBUG</strong><br>'
+    +'window.innerWidth: <strong>'+window.innerWidth+'</strong> | DPR: <strong>'+window.devicePixelRatio+'</strong><br>'
+    +'canvas.width: <strong>'+imgCanvas.width+'</strong> | canvas.height: <strong>'+imgCanvas.height+'</strong><br>'
+    +'canvas display (rect): <strong>'+Math.round(r.width)+'x'+Math.round(r.height)+'</strong><br>'
+    +'img.width: <strong>'+img.width+'</strong> | img.height: <strong>'+img.height+'</strong><br>'
+    +'Rim span (img-px): <strong>'+rimPx+'</strong> | px/mm rim: <strong>'+pxPerMmRim.toFixed(3)+'</strong><br>'
+    +'A:('+Math.round(refPoints[0].x)+','+Math.round(refPoints[0].y)+') B:('+Math.round(refPoints[1].x)+','+Math.round(refPoints[1].y)+')';
+  box.innerHTML=html; box.style.display='';
 }
 
 // ── Redraw ────────────────────────────────────────────────────────────────────
