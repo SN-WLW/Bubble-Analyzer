@@ -586,7 +586,6 @@ function resetAll(){
 // ── Analysis ──────────────────────────────────────────────────────────────────
 function runAnalysis(){
   if(!img||!pxPerMmFroth)return;
-  // roi and refPoints are in image pixel space — use directly
   var srcX=0,srcY=0,srcW=img.width,srcH=img.height;
   if(roi){
     srcX=Math.round(roi.x);
@@ -594,19 +593,35 @@ function runAnalysis(){
     srcW=Math.min(Math.round(roi.w), img.width-srcX);
     srcH=Math.min(Math.round(roi.h), img.height-srcY);
   }
-  var off=document.createElement('canvas');off.width=srcW;off.height=srcH;
-  var oc=off.getContext('2d');oc.drawImage(img,srcX,srcY,srcW,srcH,0,0,srcW,srcH);
-  var id=oc.getImageData(0,0,srcW,srcH).data;
-  var gray=new Uint8Array(srcW*srcH);
-  for(var i=0;i<srcW*srcH;i++)gray[i]=Math.round(0.299*id[i*4]+0.587*id[i*4+1]+0.114*id[i*4+2]);
-  var blurred=gaussianBlur(gray,srcW,srcH);
-  var binary=adaptiveThreshold(blurred,srcW,srcH,15,4);
-  var cleaned=morphOpen(binary,srcW,srcH);
-  var lab=connectedComponents(cleaned,srcW,srcH);
-  var bubbles=measureComponents(lab.labels,lab.count,srcW,srcH,pxPerMmFroth,srcX,srcY);
+
+  // Mobile Safari caps canvas at ~16MP. Cap analysis region to 2048px on longest side.
+  // Scale pxPerMm down proportionally so bubble sizes remain correct.
+  var MAX_DIM = 2048;
+  var scale = 1;
+  if(srcW > MAX_DIM || srcH > MAX_DIM){
+    scale = Math.min(MAX_DIM/srcW, MAX_DIM/srcH);
+  }
+  var canW = Math.round(srcW*scale);
+  var canH = Math.round(srcH*scale);
+  var analysisPixPerMm = pxPerMmFroth * scale;
+
+  var off=document.createElement('canvas'); off.width=canW; off.height=canH;
+  var oc=off.getContext('2d');
+  oc.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, canW, canH);
+  var id=oc.getImageData(0,0,canW,canH).data;
+  var gray=new Uint8Array(canW*canH);
+  for(var i=0;i<canW*canH;i++) gray[i]=Math.round(0.299*id[i*4]+0.587*id[i*4+1]+0.114*id[i*4+2]);
+
+  var blurred=gaussianBlur(gray,canW,canH);
+  var binary=adaptiveThreshold(blurred,canW,canH,15,4);
+  var cleaned=morphOpen(binary,canW,canH);
+  var lab=connectedComponents(cleaned,canW,canH);
+  var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
   showResults(bubbles);
   drawAnnotated(bubbles,srcX,srcY,srcW,srcH);
 }
+
+// ── Image processing ──────────────────────────────────────────────────────────
 
 // ── Image processing ──────────────────────────────────────────────────────────
 function gaussianBlur(gray,w,h){
@@ -631,11 +646,21 @@ function connectedComponents(bin,w,h){
   for(var y=0;y<h;y++)for(var x=0;x<w;x++){if(bin[y*w+x]&&!lab[y*w+x]){lbl++;stk.push(y*w+x);while(stk.length){var i=stk.pop();if(!bin[i]||lab[i])continue;lab[i]=lbl;var px=i%w,py=Math.floor(i/w);if(px>0)stk.push(i-1);if(px<w-1)stk.push(i+1);if(py>0)stk.push(i-w);if(py<h-1)stk.push(i+w);}}}
   return{labels:lab,count:lbl};
 }
-function measureComponents(lab,count,w,h,pxPerMm,offX,offY){
+function measureComponents(lab,count,w,h,pxPerMm,offX,offY,scale){
+  scale=scale||1;
   var areas=new Float32Array(count+1),sx=new Float32Array(count+1),sy=new Float32Array(count+1);
   for(var i=0;i<w*h;i++){var l=lab[i];if(!l)continue;areas[l]++;sx[l]+=i%w;sy[l]+=Math.floor(i/w);}
   var res=[];
-  for(var l=1;l<=count;l++){var a=areas[l];if(a<8||a>80000)continue;var eqPx=2*Math.sqrt(a/Math.PI);res.push({cx:Math.round(sx[l]/a)+offX,cy:Math.round(sy[l]/a)+offY,areaMm2:parseFloat((a/(pxPerMm*pxPerMm)).toFixed(4)),eqDiamMm:parseFloat((eqPx/pxPerMm).toFixed(3)),radiusPx:Math.round(eqPx/2)});}
+  for(var l=1;l<=count;l++){
+    var a=areas[l]; if(a<8||a>80000)continue;
+    var eqPx=2*Math.sqrt(a/Math.PI);
+    // Convert canvas-space center back to image-space by dividing by scale, then add offset
+    var cx=Math.round((sx[l]/a)/scale)+offX;
+    var cy=Math.round((sy[l]/a)/scale)+offY;
+    // radiusPx for annotation: convert to image pixels
+    var radiusPx=Math.round(eqPx/2/scale);
+    res.push({cx:cx,cy:cy,areaMm2:parseFloat((a/(pxPerMm*pxPerMm)).toFixed(4)),eqDiamMm:parseFloat((eqPx/pxPerMm).toFixed(3)),radiusPx:radiusPx});
+  }
   res.sort(function(a,b){return b.areaMm2-a.areaMm2;});
   return res;
 }
