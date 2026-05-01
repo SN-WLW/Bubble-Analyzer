@@ -348,16 +348,17 @@ function loadFile(file){
       document.getElementById('uploadCard').querySelector('.step-label').textContent='Step 1 — image loaded';
       document.getElementById('resetBtn').style.display='';
       document.getElementById('calibCard').style.display='';
-      // Fix canvas internal resolution to image size (capped at 1200px wide)
-      // CSS display size is controlled by max-width:100% in CSS
-      // getPos() uses getBoundingClientRect() so it always maps correctly
-      var maxW=Math.min(img.width, 1200);
-      var sc=maxW/img.width;
-      imgCanvas.width=maxW;
-      imgCanvas.height=Math.round(img.height*sc);
+      // Use the card's width as the canvas width — this is the actual display width
+      // on any device, accounting for screen size, zoom, and DPR automatically
+      var container=document.getElementById('calibCard');
+      var displayW=container.getBoundingClientRect().width - 40; // subtract padding
+      displayW=Math.max(200, Math.min(displayW, img.width)); // clamp
+      var displayH=Math.round(displayW * img.height / img.width);
+      imgCanvas.width=Math.round(displayW);
+      imgCanvas.height=displayH;
       imgCanvas.style.width='100%';
       imgCanvas.style.height='auto';
-      imgCanvas.dataset.scale=sc;
+      imgCanvas.dataset.scale=imgCanvas.width/img.width;
       ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
       refPoints=[]; roi=null; roiStart=null; roiCurrent=null;
       mode='ref'; refClickState=1;
@@ -369,24 +370,22 @@ function loadFile(file){
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
-// getPos maps pointer position directly to image pixel space.
-// getBoundingClientRect returns CSS pixels — divide by devicePixelRatio to get
-// physical pixels, then scale to image dimensions.
+// Canvas internal resolution = display size, so clientX maps 1:1 to canvas pixels.
+// We then scale to image pixels using imgCanvas.width / img.width.
 function getPos(e){
   var r=imgCanvas.getBoundingClientRect();
-  var dpr=window.devicePixelRatio||1;
   var clientX=e.clientX!==undefined?e.clientX:e.touches[0].clientX;
   var clientY=e.clientY!==undefined?e.clientY:e.touches[0].clientY;
-  // r.width and r.height are in CSS pixels
-  // img.width/height are in image pixels
-  // No DPR adjustment needed here — clientX/Y and r.left/top are all in CSS pixels
-  // so they cancel correctly. DPR only matters if canvas internal size was set
-  // using physical pixels, which we don't do.
-  var imgScaleX=img.width /r.width;
-  var imgScaleY=img.height/r.height;
+  // Canvas internal px = display px (we set it that way in loadFile)
+  // Image px = canvas px * (img.width / canvas.width)
+  var toImgX=img.width /imgCanvas.width;
+  var toImgY=img.height/imgCanvas.height;
+  // Map CSS px → canvas px → image px
+  var canX=(clientX-r.left)*(imgCanvas.width/r.width);
+  var canY=(clientY-r.top) *(imgCanvas.height/r.height);
   return{
-    x:Math.max(0,Math.min(img.width,  (clientX-r.left)*imgScaleX)),
-    y:Math.max(0,Math.min(img.height, (clientY-r.top) *imgScaleY))
+    x:Math.max(0,Math.min(img.width,  canX*toImgX)),
+    y:Math.max(0,Math.min(img.height, canY*toImgY))
   };
 }
 imgCanvas.addEventListener('mousedown',function(e){
