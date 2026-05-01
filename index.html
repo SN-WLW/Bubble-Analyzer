@@ -396,6 +396,42 @@ imgCanvas.addEventListener('mouseup',function(e){
 });
 imgCanvas.addEventListener('mouseleave',function(){if(roiDragging){roiDragging=false;roiStart=null;roiCurrent=null;redraw();}});
 
+// ── Direct touch handlers (bypass synthetic mouse events for accuracy) ────────
+imgCanvas.addEventListener('touchstart',function(e){
+  if(e.touches.length!==1)return;
+  e.preventDefault();
+  var t=e.touches[0];
+  var pos=getPos(t);
+  if(mode==='ref'){
+    if(refClickState===1){refPoints[0]=pos;refClickState=2;}
+    else if(refClickState===2){refPoints[1]=pos;refClickState=0;}
+    else{refPoints=[pos];refClickState=2;}
+    redraw();updateUI();checkReady();
+  }else if(mode==='roi'){
+    roiDragging=true;roiStart=pos;roiCurrent=pos;roi=null;
+  }
+},{passive:false});
+
+imgCanvas.addEventListener('touchmove',function(e){
+  if(e.touches.length!==1)return;
+  e.preventDefault();
+  if(mode==='roi'&&roiDragging){
+    roiCurrent=getPos(e.touches[0]);
+    redraw();
+  }
+},{passive:false});
+
+imgCanvas.addEventListener('touchend',function(e){
+  e.preventDefault();
+  if(mode==='roi'&&roiDragging){
+    roiDragging=false;
+    var x1=Math.min(roiStart.x,roiCurrent.x),y1=Math.min(roiStart.y,roiCurrent.y);
+    var x2=Math.max(roiStart.x,roiCurrent.x),y2=Math.max(roiStart.y,roiCurrent.y);
+    if(x2-x1>10&&y2-y1>10)roi={x:x1,y:y1,w:x2-x1,h:y2-y1};
+    roiStart=null;roiCurrent=null;redraw();updateUI();checkReady();
+  }
+},{passive:false});
+
 // ── Mode ──────────────────────────────────────────────────────────────────────
 function setMode(m){
   mode=m;
@@ -793,21 +829,7 @@ clearAll=function(){
 };
 loadHistoryFromStorage();
 
-// ── Touch support for canvas ──────────────────────────────────────────────────
-imgCanvas.addEventListener('touchstart',function(e){
-  if(e.touches.length!==1)return; e.preventDefault();
-  var t=e.touches[0];
-  imgCanvas.dispatchEvent(new MouseEvent('mousedown',{clientX:t.clientX,clientY:t.clientY,bubbles:true}));
-},{passive:false});
-imgCanvas.addEventListener('touchmove',function(e){
-  if(e.touches.length!==1)return; e.preventDefault();
-  var t=e.touches[0];
-  imgCanvas.dispatchEvent(new MouseEvent('mousemove',{clientX:t.clientX,clientY:t.clientY,bubbles:true}));
-},{passive:false});
-imgCanvas.addEventListener('touchend',function(e){
-  e.preventDefault();
-  imgCanvas.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
-},{passive:false});
+// ── Touch support handled directly above on imgCanvas ─────────────────────────
 
 // ── Toast notification ────────────────────────────────────────────────────────
 function showToast(msg,type){
