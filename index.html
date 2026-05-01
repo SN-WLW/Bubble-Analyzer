@@ -369,18 +369,18 @@ function loadFile(file){
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
-// getPos maps any pointer position (mouse or touch) into canvas pixel space.
-// getBoundingClientRect gives CSS display size; canvas.width is internal resolution.
-// Dividing gives the correct scale regardless of devicePixelRatio or screen size.
+// getPos returns coordinates in IMAGE pixel space directly.
+// This makes all measurements screen-independent — same result on any device.
 function getPos(e){
   var r=imgCanvas.getBoundingClientRect();
-  var scaleX=imgCanvas.width /r.width;
-  var scaleY=imgCanvas.height/r.height;
   var clientX=e.clientX!==undefined?e.clientX:e.touches[0].clientX;
   var clientY=e.clientY!==undefined?e.clientY:e.touches[0].clientY;
+  // Map from CSS display pixels → image pixels in one step
+  var imgScaleX=img.width /r.width;
+  var imgScaleY=img.height/r.height;
   return{
-    x:Math.max(0,Math.min(imgCanvas.width,  (clientX-r.left)*scaleX)),
-    y:Math.max(0,Math.min(imgCanvas.height, (clientY-r.top) *scaleY))
+    x:Math.max(0,Math.min(img.width,  (clientX-r.left)*imgScaleX)),
+    y:Math.max(0,Math.min(img.height, (clientY-r.top) *imgScaleY))
   };
 }
 imgCanvas.addEventListener('mousedown',function(e){
@@ -477,11 +477,10 @@ function updateUI(){
 function computeCalibration(){
   var rimMm=parseFloat(rimMmInput.value),zMm=parseFloat(zMmInput.value);
   if(!rimMm||rimMm<=0||refPoints.length<2)return false;
-  var rx=img?img.width/imgCanvas.width:1;
-  var rimPx=ptDist(refPoints[0],refPoints[1])*rx;
+  // refPoints are already in image pixel space — no conversion needed
+  var rimPx=ptDist(refPoints[0],refPoints[1]);
   pxPerMmRim=rimPx/rimMm;
   if(zMm>0){
-    // H estimated as 3x rim diameter — good approximation for phone-over-cup
     cameraHeightMm=rimMm*3; zDepthMm=zMm;
     pxPerMmFroth=pxPerMmRim*cameraHeightMm/(cameraHeightMm+zMm);
   }else{pxPerMmFroth=pxPerMmRim;cameraHeightMm=null;zDepthMm=0;}
@@ -501,27 +500,29 @@ function showCorrBox(){
 // ── Redraw ────────────────────────────────────────────────────────────────────
 function redraw(){
   ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
-  // Ratio to convert canvas coords → image source coords
-  var rx = img.width  / imgCanvas.width;
-  var ry = img.height / imgCanvas.height;
+  // All coords are in image pixel space — convert to canvas pixels for drawing
+  var cx=imgCanvas.width /img.width;
+  var cy=imgCanvas.height/img.height;
 
   if(roi){
     ctx.save();
     ctx.fillStyle='rgba(0,0,0,.5)';
     ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
+    // roi in image pixels; drawImage source=image pixels, dest=canvas pixels
     ctx.drawImage(img,
-      roi.x*rx, roi.y*ry, roi.w*rx, roi.h*ry,  // source: image pixels
-      roi.x,    roi.y,    roi.w,    roi.h);       // dest:   canvas pixels
+      roi.x,       roi.y,       roi.w,       roi.h,      // source: image pixels
+      roi.x*cx,    roi.y*cy,    roi.w*cx,    roi.h*cy);  // dest:   canvas pixels
     ctx.strokeStyle='#f5c842'; ctx.lineWidth=2; ctx.setLineDash([6,3]);
-    ctx.strokeRect(roi.x,roi.y,roi.w,roi.h); ctx.setLineDash([]);
+    ctx.strokeRect(roi.x*cx, roi.y*cy, roi.w*cx, roi.h*cy);
+    ctx.setLineDash([]);
     ctx.font='bold 11px system-ui'; ctx.fillStyle='#f5c842';
-    ctx.fillText('SAMPLE REGION',roi.x+6,roi.y+14);
+    ctx.fillText('SAMPLE REGION', roi.x*cx+6, roi.y*cy+14);
     ctx.restore();
   }
 
   if(roiDragging&&roiStart&&roiCurrent){
-    var x1=Math.min(roiStart.x,roiCurrent.x),y1=Math.min(roiStart.y,roiCurrent.y);
-    var w=Math.abs(roiCurrent.x-roiStart.x),h=Math.abs(roiCurrent.y-roiStart.y);
+    var x1=Math.min(roiStart.x,roiCurrent.x)*cx, y1=Math.min(roiStart.y,roiCurrent.y)*cy;
+    var w=Math.abs(roiCurrent.x-roiStart.x)*cx,  h=Math.abs(roiCurrent.y-roiStart.y)*cy;
     ctx.save();
     ctx.fillStyle='rgba(245,200,66,.1)'; ctx.fillRect(x1,y1,w,h);
     ctx.strokeStyle='#f5c842'; ctx.lineWidth=1.5; ctx.setLineDash([5,3]);
@@ -533,15 +534,17 @@ function redraw(){
     var cols=['#5a9cf5','#f5a05a'];
     for(var i=0;i<refPoints.length;i++){
       var p=refPoints[i];
-      ctx.beginPath(); ctx.arc(p.x,p.y,6,0,2*Math.PI);
+      var px=p.x*cx, py=p.y*cy;
+      ctx.beginPath(); ctx.arc(px,py,6,0,2*Math.PI);
       ctx.fillStyle=cols[i]; ctx.fill();
       ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
       ctx.fillStyle='#fff'; ctx.font='bold 12px system-ui';
-      ctx.fillText(i===0?'A':'B',p.x+9,p.y+5);
+      ctx.fillText(i===0?'A':'B', px+9, py+5);
     }
     if(refPoints.length===2){
-      ctx.beginPath(); ctx.moveTo(refPoints[0].x,refPoints[0].y);
-      ctx.lineTo(refPoints[1].x,refPoints[1].y);
+      ctx.beginPath();
+      ctx.moveTo(refPoints[0].x*cx, refPoints[0].y*cy);
+      ctx.lineTo(refPoints[1].x*cx, refPoints[1].y*cy);
       ctx.strokeStyle='rgba(255,255,255,.5)'; ctx.lineWidth=1;
       ctx.setLineDash([4,3]); ctx.stroke(); ctx.setLineDash([]);
     }
@@ -571,14 +574,13 @@ function resetAll(){
 // ── Analysis ──────────────────────────────────────────────────────────────────
 function runAnalysis(){
   if(!img||!pxPerMmFroth)return;
-  var rx=img.width/imgCanvas.width;
-  var ry=img.height/imgCanvas.height;
+  // roi and refPoints are in image pixel space — use directly
   var srcX=0,srcY=0,srcW=img.width,srcH=img.height;
   if(roi){
-    srcX=Math.round(roi.x*rx);
-    srcY=Math.round(roi.y*ry);
-    srcW=Math.min(Math.round(roi.w*rx), img.width-srcX);
-    srcH=Math.min(Math.round(roi.h*ry), img.height-srcY);
+    srcX=Math.round(roi.x);
+    srcY=Math.round(roi.y);
+    srcW=Math.min(Math.round(roi.w), img.width-srcX);
+    srcH=Math.min(Math.round(roi.h), img.height-srcY);
   }
   var off=document.createElement('canvas');off.width=srcW;off.height=srcH;
   var oc=off.getContext('2d');oc.drawImage(img,srcX,srcY,srcW,srcH,0,0,srcW,srcH);
