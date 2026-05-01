@@ -369,13 +369,19 @@ function loadFile(file){
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
-// getPos returns coordinates in IMAGE pixel space directly.
-// This makes all measurements screen-independent — same result on any device.
+// getPos maps pointer position directly to image pixel space.
+// getBoundingClientRect returns CSS pixels — divide by devicePixelRatio to get
+// physical pixels, then scale to image dimensions.
 function getPos(e){
   var r=imgCanvas.getBoundingClientRect();
+  var dpr=window.devicePixelRatio||1;
   var clientX=e.clientX!==undefined?e.clientX:e.touches[0].clientX;
   var clientY=e.clientY!==undefined?e.clientY:e.touches[0].clientY;
-  // Map from CSS display pixels → image pixels in one step
+  // r.width and r.height are in CSS pixels
+  // img.width/height are in image pixels
+  // No DPR adjustment needed here — clientX/Y and r.left/top are all in CSS pixels
+  // so they cancel correctly. DPR only matters if canvas internal size was set
+  // using physical pixels, which we don't do.
   var imgScaleX=img.width /r.width;
   var imgScaleY=img.height/r.height;
   return{
@@ -492,8 +498,14 @@ function showCorrBox(){
   var box=document.getElementById('correctionBox');
   if(!pxPerMmFroth){box.style.display='none';return;}
   var pct=((pxPerMmFroth/pxPerMmRim-1)*100).toFixed(2);
-  var html='<strong>Perspective correction active</strong><br>px/mm at rim: <strong>'+pxPerMmRim.toFixed(3)+'</strong> | px/mm at froth: <strong>'+pxPerMmFroth.toFixed(3)+'</strong>';
-  if(cameraHeightMm&&zDepthMm>0)html+='<br>Camera H: <strong>'+cameraHeightMm.toFixed(1)+' mm</strong> | Z: <strong>'+zDepthMm+' mm</strong> | Scale correction: <strong>'+(pct>=0?'+':'')+pct+'%</strong>';
+  var rimPx=refPoints.length===2?ptDist(refPoints[0],refPoints[1]).toFixed(1):'?';
+  var html='<strong>Calibration debug</strong><br>'
+    +'Image size: <strong>'+img.width+'x'+img.height+' px</strong> | '
+    +'Canvas display: <strong>'+Math.round(imgCanvas.getBoundingClientRect().width)+'x'+Math.round(imgCanvas.getBoundingClientRect().height)+' px</strong><br>'
+    +'Rim span: <strong>'+rimPx+' img-px</strong> | '
+    +'px/mm at rim: <strong>'+pxPerMmRim.toFixed(3)+'</strong> | '
+    +'px/mm at froth: <strong>'+pxPerMmFroth.toFixed(3)+'</strong>';
+  if(cameraHeightMm&&zDepthMm>0)html+='<br>Camera H: <strong>'+cameraHeightMm.toFixed(1)+' mm</strong> | Z: <strong>'+zDepthMm+' mm</strong> | Correction: <strong>'+(pct>=0?'+':'')+pct+'%</strong>';
   box.innerHTML=html;box.style.display='';
 }
 
