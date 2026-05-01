@@ -348,8 +348,15 @@ function loadFile(file){
       document.getElementById('uploadCard').querySelector('.step-label').textContent='Step 1 — image loaded';
       document.getElementById('resetBtn').style.display='';
       document.getElementById('calibCard').style.display='';
-      var maxW=Math.min(img.width,760), sc=maxW/img.width;
-      imgCanvas.width=maxW; imgCanvas.height=Math.round(img.height*sc);
+      // Fix canvas internal resolution to image size (capped at 1200px wide)
+      // CSS display size is controlled by max-width:100% in CSS
+      // getPos() uses getBoundingClientRect() so it always maps correctly
+      var maxW=Math.min(img.width, 1200);
+      var sc=maxW/img.width;
+      imgCanvas.width=maxW;
+      imgCanvas.height=Math.round(img.height*sc);
+      imgCanvas.style.width='100%';
+      imgCanvas.style.height='auto';
       imgCanvas.dataset.scale=sc;
       ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
       refPoints=[]; roi=null; roiStart=null; roiCurrent=null;
@@ -362,14 +369,18 @@ function loadFile(file){
 }
 
 // ── Canvas ────────────────────────────────────────────────────────────────────
-// getPos always returns coordinates in CANVAS pixel space (not CSS pixels, not image pixels)
+// getPos maps any pointer position (mouse or touch) into canvas pixel space.
+// getBoundingClientRect gives CSS display size; canvas.width is internal resolution.
+// Dividing gives the correct scale regardless of devicePixelRatio or screen size.
 function getPos(e){
   var r=imgCanvas.getBoundingClientRect();
-  var scaleX=imgCanvas.width/r.width;
+  var scaleX=imgCanvas.width /r.width;
   var scaleY=imgCanvas.height/r.height;
+  var clientX=e.clientX!==undefined?e.clientX:e.touches[0].clientX;
+  var clientY=e.clientY!==undefined?e.clientY:e.touches[0].clientY;
   return{
-    x:Math.max(0,Math.min(imgCanvas.width, (e.clientX-r.left)*scaleX)),
-    y:Math.max(0,Math.min(imgCanvas.height,(e.clientY-r.top) *scaleY))
+    x:Math.max(0,Math.min(imgCanvas.width,  (clientX-r.left)*scaleX)),
+    y:Math.max(0,Math.min(imgCanvas.height, (clientY-r.top) *scaleY))
   };
 }
 imgCanvas.addEventListener('mousedown',function(e){
@@ -400,8 +411,7 @@ imgCanvas.addEventListener('mouseleave',function(){if(roiDragging){roiDragging=f
 imgCanvas.addEventListener('touchstart',function(e){
   if(e.touches.length!==1)return;
   e.preventDefault();
-  var t=e.touches[0];
-  var pos=getPos(t);
+  var pos=getPos(e.touches[0]);
   if(mode==='ref'){
     if(refClickState===1){refPoints[0]=pos;refClickState=2;}
     else if(refClickState===2){refPoints[1]=pos;refClickState=0;}
