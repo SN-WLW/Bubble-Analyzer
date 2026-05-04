@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v1.8</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v1.9</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -238,6 +238,14 @@ if('serviceWorker' in navigator) {
       <label>Liquid column height (optional)</label>
       <div class="px-val" id="htPxDisplay">—</div>
       <input type="number" id="htMmInput" placeholder="cup height (mm)" min="0.1" step="0.1">
+    </div>
+    <div class="input-group">
+      <label>Min bubble size (mm) <span style="color:#555;font-weight:400">— filter out smaller</span></label>
+      <input type="number" id="minBubbleMm" placeholder="e.g. 0.05" min="0.01" step="0.01" value="0.05">
+    </div>
+    <div class="input-group">
+      <label>Max bubble size (mm) <span style="color:#555;font-weight:400">— filter out larger</span></label>
+      <input type="number" id="maxBubbleMm" placeholder="e.g. 3.0" min="0.1" step="0.1" value="3.0">
     </div>
   </div>
   <div class="correction-box" id="correctionBox"></div>
@@ -657,16 +665,20 @@ function connectedComponents(bin,w,h){
 }
 function measureComponents(lab,count,w,h,pxPerMm,offX,offY,scale){
   scale=scale||1;
+  // Convert mm size limits to pixel area limits at analysis scale
+  var minMm=parseFloat(document.getElementById('minBubbleMm').value)||0.05;
+  var maxMm=parseFloat(document.getElementById('maxBubbleMm').value)||3.0;
+  var minAreaPx = Math.PI * Math.pow((minMm * pxPerMm / 2), 2);
+  var maxAreaPx = Math.PI * Math.pow((maxMm * pxPerMm / 2), 2);
   var areas=new Float32Array(count+1),sx=new Float32Array(count+1),sy=new Float32Array(count+1);
   for(var i=0;i<w*h;i++){var l=lab[i];if(!l)continue;areas[l]++;sx[l]+=i%w;sy[l]+=Math.floor(i/w);}
   var res=[];
   for(var l=1;l<=count;l++){
-    var a=areas[l]; if(a<8||a>80000)continue;
+    var a=areas[l];
+    if(a<minAreaPx||a>maxAreaPx) continue;
     var eqPx=2*Math.sqrt(a/Math.PI);
-    // Convert canvas-space center back to image-space by dividing by scale, then add offset
     var cx=Math.round((sx[l]/a)/scale)+offX;
     var cy=Math.round((sy[l]/a)/scale)+offY;
-    // radiusPx for annotation: convert to image pixels
     var radiusPx=Math.round(eqPx/2/scale);
     res.push({cx:cx,cy:cy,areaMm2:parseFloat((a/(pxPerMm*pxPerMm)).toFixed(4)),eqDiamMm:parseFloat((eqPx/pxPerMm).toFixed(3)),radiusPx:radiusPx});
   }
@@ -812,7 +824,9 @@ function showResults(bubbles){
   var verdictText=verdictClass==='good'?'Excellent microfoam — predominantly sub-0.5mm bubbles.':verdictClass==='ok'?'Mixed foam — decent but room to improve.':'Large bubbles dominate — steaming technique needs work.';
 
   // Store stats + full raw diameters for saving and export
-  lastStats={n:n,mean:mean.toFixed(3),median:median.toFixed(3),min:sorted[0].toFixed(3),max:sorted[sorted.length-1].toFixed(3),std:std.toFixed(3),micro:micro,small:small,medium:medium,large:large,verdictClass:verdictClass,verdictText:verdictText,pxPerMmRim:pxPerMmRim?pxPerMmRim.toFixed(3):'',pxPerMmFroth:pxPerMmFroth?pxPerMmFroth.toFixed(3):'',zDepthMm:zDepthMm||0,cameraH:cameraHeightMm?cameraHeightMm.toFixed(1):'',liquidH:liquidHeightMm||'',meanPctH:liquidHeightMm?(mean/liquidHeightMm*100).toFixed(2):'',maxPctH:liquidHeightMm?(sorted[sorted.length-1]/liquidHeightMm*100).toFixed(2):'',timestamp:new Date().toISOString(),diameters:diams.map(function(d){return parseFloat(d.toFixed(4));})};
+  var minMmUsed=parseFloat(document.getElementById('minBubbleMm').value)||0.05;
+  var maxMmUsed=parseFloat(document.getElementById('maxBubbleMm').value)||3.0;
+  lastStats={n:n,mean:mean.toFixed(3),median:median.toFixed(3),min:sorted[0].toFixed(3),max:sorted[sorted.length-1].toFixed(3),std:std.toFixed(3),micro:micro,small:small,medium:medium,large:large,verdictClass:verdictClass,verdictText:verdictText,pxPerMmRim:pxPerMmRim?pxPerMmRim.toFixed(3):'',pxPerMmFroth:pxPerMmFroth?pxPerMmFroth.toFixed(3):'',zDepthMm:zDepthMm||0,cameraH:cameraHeightMm?cameraHeightMm.toFixed(1):'',liquidH:liquidHeightMm||'',meanPctH:liquidHeightMm?(mean/liquidHeightMm*100).toFixed(2):'',maxPctH:liquidHeightMm?(sorted[sorted.length-1]/liquidHeightMm*100).toFixed(2):'',timestamp:new Date().toISOString(),diameters:diams.map(function(d){return parseFloat(d.toFixed(4));}),minFilterMm:minMmUsed,maxFilterMm:maxMmUsed};
 
   // Draw histogram
   drawHistogram(diams, mean, std);
@@ -1028,8 +1042,8 @@ function showToast(msg,type){
 
 // ── Export helpers ────────────────────────────────────────────────────────────
 function buildRows(){
-  var headers=['Name','Timestamp','Bubbles','Mean (mm)','Median (mm)','Min (mm)','Max (mm)','StdDev (mm)','Micro (<0.5mm)','Small (0.5-1.5mm)','Medium (1.5-3mm)','Large (>=3mm)','Verdict','px/mm Rim','px/mm Froth','Z Depth (mm)','Camera H (mm)','Cup Height (mm)','Mean % Height','Max % Height'];
-  var rows=historyLog.map(function(e){return[e.label,e.timestamp,e.n,e.mean,e.median,e.min,e.max,e.std,e.micro,e.small,e.medium,e.large,e.verdictText,e.pxPerMmRim,e.pxPerMmFroth,e.zDepthMm,e.cameraH,e.liquidH,e.meanPctH,e.maxPctH];});
+  var headers=['Name','Timestamp','Bubbles','Mean (mm)','Median (mm)','Min (mm)','Max (mm)','StdDev (mm)','Micro (<0.5mm)','Small (0.5-1.5mm)','Medium (1.5-3mm)','Large (>=3mm)','Verdict','px/mm Rim','px/mm Froth','Z Depth (mm)','Camera H (mm)','Cup Height (mm)','Mean % Height','Max % Height','Min Filter (mm)','Max Filter (mm)'];
+  var rows=historyLog.map(function(e){return[e.label,e.timestamp,e.n,e.mean,e.median,e.min,e.max,e.std,e.micro,e.small,e.medium,e.large,e.verdictText,e.pxPerMmRim,e.pxPerMmFroth,e.zDepthMm,e.cameraH,e.liquidH,e.meanPctH,e.maxPctH,e.minFilterMm||'',e.maxFilterMm||''];});
   return{headers:headers,rows:rows};
 }
 
