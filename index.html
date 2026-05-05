@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.13</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.15</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -788,11 +788,15 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
   // Step 1: Light smoothing to suppress sub-pixel noise
   var smoothed=boxBlur(gray,w,h,1.5);
 
-  // Step 2: Estimate local background with a large blur (~1mm radius)
-  var bgSigma=Math.max(8, pxPerMm*0.8);
+  // Step 2: Estimate local background with a moderate blur.
+  // Must be large enough to span a bubble but small enough to track
+  // local density in dense bubble fields (0.3mm sweet spot).
+  // Using ~0.8mm was too large — in dense regions it averaged over many
+  // bubbles, making each individual bubble invisible above "background".
+  var bgSigma=Math.max(4, pxPerMm*0.3);
   var bg=boxBlur(gray,w,h,bgSigma);
 
-  // Contrast = how much brighter each pixel is than its ~1mm neighbourhood
+  // Contrast = how much brighter each pixel is than its local neighbourhood
   var contrast=new Float32Array(w*h);
   var stdSum=0, stdN=0;
   for(var i=0;i<w*h;i++){
@@ -801,9 +805,10 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
   }
   var contrastStd=Math.sqrt(stdSum/stdN);
 
-  // Sensitivity maps to contrast threshold: lower sens = stricter
-  var thresh=contrastStd*(1.2-(sens-1)*0.08);
-  thresh=Math.max(contrastStd*0.4, thresh);
+  // Sensitivity: higher = lower threshold = more detections
+  // Range: 1.5×std (sens=1, strict) down to 0.3×std (sens=10, permissive)
+  var thresh=contrastStd*(1.5-(sens-1)*0.12);
+  thresh=Math.max(contrastStd*0.3, thresh);
 
   // Step 3: Find local maxima within a window = min bubble diameter
   var winR=Math.max(2,Math.round(minRpx));
@@ -824,24 +829,50 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
     }
   }
 
-  // Step 4: For each peak, estimate radius from radial intensity falloff
-  // Radius = distance where intensity drops to 40% of peak contrast above background
-  var angles=[0,0.785,1.571,2.356,3.14,3.927,4.712,5.498]; // 8 directions
+  // Step 4: For each peak, recentre + estimate radius from radial intensity falloff
+  var angles=[0,0.524,1.047,1.571,2.094,2.618,3.14,3.665,4.189,4.712,5.236,5.76]; // 12 directions
   var results=[];
   for(var pi=0;pi<peaks.length;pi++){
     var pk=peaks[pi];
     var cx=pk.x, cy=pk.y;
-    var peakVal=smoothed[cy*w+cx];
-    var bgVal=bg[cy*w+cx];
-    var halfTarget=bgVal+(peakVal-bgVal)*0.4;
 
+    // FIX 1: Use RAW pixel value not smoothed for radius estimation.
+    // Smoothing drops the peak ~10 grey levels, halving apparent contrast
+    // and causing the falloff to be reached too early → undersized circles.
+    var bgVal=bg[cy*w+cx];
+    var rawPeak=gray[cy*w+cx];
+    var pContrast=rawPeak-bgVal;
+    if(pContrast<thresh)continue;
+
+    // FIX 2: Recentre using intensity-weighted centroid.
+    // Local maxima land on specular highlights which are asymmetrically placed
+    // on bubble surfaces. Centroiding corrects to geometric bubble centre.
+    var searchR=Math.max(3,Math.round(minRpx*2));
+    var wsumX=0,wsumY=0,wtot=0;
+    for(var dy=-searchR;dy<=searchR;dy++){
+      for(var dx=-searchR;dx<=searchR;dx++){
+        if(dy*dy+dx*dx>searchR*searchR)continue;
+        var ry=cy+dy,rx=cx+dx;
+        if(ry>=0&&ry<h&&rx>=0&&rx<w){
+          var wv=Math.max(0,gray[ry*w+rx]-bgVal);
+          wsumX+=rx*wv; wsumY+=ry*wv; wtot+=wv;
+        }
+      }
+    }
+    if(wtot>0){cx=Math.round(wsumX/wtot); cy=Math.round(wsumY/wtot);}
+
+    // FIX 3: Use 15% falloff instead of 40%.
+    // These bubbles have a very gradual intensity slope — at 40% the ring mean
+    // is already reached well inside the visible bubble boundary. 15% continues
+    // outward to where the bubble truly blends into background.
+    var halfTarget=bgVal+pContrast*0.15;
     var foundR=0;
     for(var r=1;r<=maxRpx;r++){
-      var ringSum=0, ringN=0;
+      var ringSum=0,ringN=0;
       for(var ai=0;ai<angles.length;ai++){
         var ry=Math.round(cy+r*Math.sin(angles[ai]));
         var rx=Math.round(cx+r*Math.cos(angles[ai]));
-        if(ry>=0&&ry<h&&rx>=0&&rx<w){ringSum+=smoothed[ry*w+rx];ringN++;}
+        if(ry>=0&&ry<h&&rx>=0&&rx<w){ringSum+=gray[ry*w+rx];ringN++;}
       }
       if(ringN===0)break;
       if(ringSum/ringN<halfTarget){foundR=r;break;}
@@ -849,7 +880,7 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
     if(foundR<1)foundR=Math.round(minRpx);
     var diam=foundR*2/pxPerMm;
     if(diam<minMm||diam>maxMm)continue;
-    results.push({x:cx,y:cy,rpx:foundR,diam:diam,v:pk.c});
+    results.push({x:cx,y:cy,rpx:foundR,diam:diam,v:pContrast});
   }
 
   // Step 5: NMS — remove overlapping detections, keep stronger ones
