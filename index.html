@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v1.9</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.0</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -631,8 +631,9 @@ function runAnalysis(){
 
   var blurred=gaussianBlur(gray,canW,canH);
   var binary=adaptiveThreshold(blurred,canW,canH,15,4);
-  var cleaned=morphOpen(binary,canW,canH);
-  var lab=connectedComponents(cleaned,canW,canH);
+  var opened=morphOpen(binary,canW,canH);
+  var closed=morphClose(opened,canW,canH);
+  var lab=connectedComponents(closed,canW,canH);
   var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
   showResults(bubbles);
   drawAnnotated(bubbles,srcX,srcY,srcW,srcH);
@@ -657,6 +658,21 @@ function morphOpen(bin,w,h){
   for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){if(bin[y*w+x]&&bin[(y-1)*w+x]&&bin[(y+1)*w+x]&&bin[y*w+x-1]&&bin[y*w+x+1])er[y*w+x]=1;}
   for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){if(er[y*w+x]||er[(y-1)*w+x]||er[(y+1)*w+x]||er[y*w+x-1]||er[y*w+x+1])op[y*w+x]=1;}
   return op;
+}
+// morphClose: dilation then erosion — fills holes inside ring-shaped blobs
+// This allows the algorithm to measure the full outer diameter of bubble rings
+// rather than just the dark ring wall pixels
+function morphClose(bin,w,h){
+  var dil=new Uint8Array(w*h),cl=new Uint8Array(w*h);
+  // Dilation — expand dark regions to fill interior gaps
+  for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){
+    if(bin[y*w+x]||bin[(y-1)*w+x]||bin[(y+1)*w+x]||bin[y*w+x-1]||bin[y*w+x+1])dil[y*w+x]=1;
+  }
+  // Erosion — shrink back to remove spurious expansions at boundaries
+  for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){
+    if(dil[y*w+x]&&dil[(y-1)*w+x]&&dil[(y+1)*w+x]&&dil[y*w+x-1]&&dil[y*w+x+1])cl[y*w+x]=1;
+  }
+  return cl;
 }
 function connectedComponents(bin,w,h){
   var lab=new Int32Array(w*h),lbl=0,stk=[];
