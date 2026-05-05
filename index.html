@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.3</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.5</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -246,6 +246,17 @@ if('serviceWorker' in navigator) {
     <div class="input-group">
       <label>Max bubble size (mm) <span style="color:#555;font-weight:400">— filter out larger</span></label>
       <input type="number" id="maxBubbleMm" placeholder="e.g. 3.0" min="0.1" step="0.1" value="3.0">
+    </div>
+    <div class="input-group">
+      <label>Detection sensitivity <span style="color:#555;font-weight:400">— lower = stricter</span></label>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+        <input type="range" id="sensitivitySlider" min="1" max="10" value="5" step="1" style="flex:1;accent-color:#5a9cf5">
+        <span id="sensitivityVal" style="font-size:13px;color:#a0c4f8;min-width:16px;text-align:right">5</span>
+      </div>
+    </div>
+    <div class="input-group">
+      <label>Min circularity <span style="color:#555;font-weight:400">— 1.0 = perfect circle</span></label>
+      <input type="number" id="minCircularity" placeholder="e.g. 0.5" min="0.1" max="1.0" step="0.05" value="0.5">
     </div>
     <div class="input-group" style="grid-column:1/-1">
       <label>Image polarity</label>
@@ -410,6 +421,9 @@ uploadZoneEl.addEventListener('drop', function(e) {
 rimMmInput.addEventListener('input',checkReady);
 zMmInput.addEventListener('input',checkReady);
 htMmInput.addEventListener('input',checkReady);
+document.getElementById('sensitivitySlider').addEventListener('input',function(){
+  document.getElementById('sensitivityVal').textContent=this.value;
+});
 
 function loadFile(file){
   var reader=new FileReader();
@@ -724,9 +738,20 @@ function runAnalysis(){
     gray[i]=imgPolarity==='invert'?(255-lum):lum;
   }
 
-  var blurred=gaussianBlur(gray,canW,canH);
-  var binary=adaptiveThreshold(blurred,canW,canH,15,4);
-  var opened=morphOpen(binary,canW,canH);
+  // Sensitivity slider: 1=strictest, 10=most sensitive
+  var sens=parseInt(document.getElementById('sensitivitySlider').value)||5;
+  // Blur radius scales with sensitivity and image resolution
+  var blurR=Math.max(1, Math.round((12-sens) * analysisPixPerMm * 0.3));
+  var blurred=gaussianBlurR(gray,canW,canH,blurR);
+  // Adaptive threshold block size: scales with px/mm so it's resolution-independent
+  var blockMm=0.4+((11-sens)*0.18);
+  var blockPx=Math.max(7, Math.round(blockMm*analysisPixPerMm)); // odd
+  if(blockPx%2===0)blockPx++;
+  var C=2+((11-sens)*0.6);
+  var binary=adaptiveThreshold(blurred,canW,canH,blockPx,C);
+  // Morphological open radius scales with resolution to remove grain
+  var morphR=Math.max(1, Math.round(analysisPixPerMm*0.04*(11-sens)*0.5));
+  var opened=morphOpenR(binary,canW,canH,morphR);
   var filled=fillHoles(opened,canW,canH);
   var lab=connectedComponents(filled,canW,canH);
   var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
@@ -737,6 +762,47 @@ function runAnalysis(){
 // ── Image processing ──────────────────────────────────────────────────────────
 
 // ── Image processing ──────────────────────────────────────────────────────────
+// Variable-radius Gaussian blur using box-blur approximation (fast, accurate enough)
+function gaussianBlurR(gray,w,h,r){
+  if(r<1)return new Float32Array(gray);
+  // Three-pass box blur approximates Gaussian well
+  var src=new Float32Array(gray);
+  for(var pass=0;pass<3;pass++){
+    var tmp=new Float32Array(w*h);
+    // Horizontal
+    for(var y=0;y<h;y++){
+      var s=0,c=0;
+      for(var x=0;x<w;x++){
+        s+=src[y*w+x];c++;
+        if(x>r){s-=src[y*w+x-r-1];c--;}
+        tmp[y*w+Math.min(x,w-1)+(x<r?0:0)]=s/c;
+      }
+      // sliding window horizontal
+      var rowS=0;
+      for(var x2=0;x2<Math.min(r,w);x2++)rowS+=src[y*w+x2];
+      var cnt=Math.min(r,w);
+      for(var x2=0;x2<w;x2++){
+        if(x2+r<w){rowS+=src[y*w+x2+r];cnt++;}
+        if(x2-r-1>=0){rowS-=src[y*w+x2-r-1];cnt--;}
+        tmp[y*w+x2]=rowS/cnt;
+      }
+    }
+    var tmp2=new Float32Array(w*h);
+    // Vertical
+    for(var x=0;x<w;x++){
+      var colS=0,cnt2=0;
+      for(var y2=0;y2<Math.min(r,h);y2++){colS+=tmp[y2*w+x];cnt2++;}
+      for(var y2=0;y2<h;y2++){
+        if(y2+r<h){colS+=tmp[(y2+r)*w+x];cnt2++;}
+        if(y2-r-1>=0){colS-=tmp[(y2-r-1)*w+x];cnt2--;}
+        tmp2[y2*w+x]=colS/cnt2;
+      }
+    }
+    src=tmp2;
+  }
+  return src;
+}
+// Legacy small fixed blur kept for reference
 function gaussianBlur(gray,w,h){
   var k=[1,4,6,4,1],tmp=new Float32Array(w*h),out=new Float32Array(w*h);
   for(var y=0;y<h;y++)for(var x=0;x<w;x++){var s=0,ws=0;for(var d=-2;d<=2;d++){var nx=x+d;if(nx>=0&&nx<w){s+=gray[y*w+nx]*k[d+2];ws+=k[d+2];}}tmp[y*w+x]=s/ws;}
@@ -747,6 +813,21 @@ function adaptiveThreshold(gray,w,h,bs,C){
   var half=Math.floor(bs/2),bin=new Uint8Array(w*h);
   for(var y=0;y<h;y++)for(var x=0;x<w;x++){var s=0,c=0;for(var dy=-half;dy<=half;dy++)for(var dx=-half;dx<=half;dx++){var ny=y+dy,nx=x+dx;if(ny>=0&&ny<h&&nx>=0&&nx<w){s+=gray[ny*w+nx];c++;}}bin[y*w+x]=(gray[y*w+x]<s/c-C)?1:0;}
   return bin;
+}
+function morphOpenR(bin,w,h,r){
+  // Erosion then dilation with radius r (square structuring element)
+  var er=new Uint8Array(w*h);
+  for(var y=r;y<h-r;y++)for(var x=r;x<w-r;x++){
+    var ok=true;
+    outer:for(var dy=-r;dy<=r;dy++)for(var dx=-r;dx<=r;dx++){if(!bin[(y+dy)*w+(x+dx)]){ok=false;break outer;}}
+    if(ok)er[y*w+x]=1;
+  }
+  var op=new Uint8Array(w*h);
+  for(var y=r;y<h-r;y++)for(var x=r;x<w-r;x++){
+    if(!er[y*w+x])continue;
+    for(var dy=-r;dy<=r;dy++)for(var dx=-r;dx<=r;dx++)op[(y+dy)*w+(x+dx)]=1;
+  }
+  return op;
 }
 function morphOpen(bin,w,h){
   var er=new Uint8Array(w*h),op=new Uint8Array(w*h);
@@ -798,22 +879,36 @@ function connectedComponents(bin,w,h){
 }
 function measureComponents(lab,count,w,h,pxPerMm,offX,offY,scale){
   scale=scale||1;
-  // Convert mm size limits to pixel area limits at analysis scale
   var minMm=parseFloat(document.getElementById('minBubbleMm').value)||0.05;
   var maxMm=parseFloat(document.getElementById('maxBubbleMm').value)||3.0;
+  var minCirc=parseFloat(document.getElementById('minCircularity').value)||0.5;
   var minAreaPx = Math.PI * Math.pow((minMm * pxPerMm / 2), 2);
   var maxAreaPx = Math.PI * Math.pow((maxMm * pxPerMm / 2), 2);
   var areas=new Float32Array(count+1),sx=new Float32Array(count+1),sy=new Float32Array(count+1);
-  for(var i=0;i<w*h;i++){var l=lab[i];if(!l)continue;areas[l]++;sx[l]+=i%w;sy[l]+=Math.floor(i/w);}
+  var perim=new Float32Array(count+1);
+  for(var i=0;i<w*h;i++){
+    var l=lab[i];if(!l)continue;
+    areas[l]++;sx[l]+=i%w;sy[l]+=Math.floor(i/w);
+    // Count perimeter pixels (any neighbour with different label including 0)
+    var px2=i%w,py2=Math.floor(i/w);
+    if(px2>0&&lab[i-1]!==l)perim[l]++;
+    if(px2<w-1&&lab[i+1]!==l)perim[l]++;
+    if(py2>0&&lab[i-w]!==l)perim[l]++;
+    if(py2<h-1&&lab[i+w]!==l)perim[l]++;
+  }
   var res=[];
   for(var l=1;l<=count;l++){
     var a=areas[l];
     if(a<minAreaPx||a>maxAreaPx) continue;
+    // Circularity = 4π·Area / Perimeter²  (1.0 = perfect circle)
+    var p=perim[l];
+    var circ=(p>0)?(4*Math.PI*a)/(p*p):0;
+    if(circ<minCirc) continue;
     var eqPx=2*Math.sqrt(a/Math.PI);
     var cx=Math.round((sx[l]/a)/scale)+offX;
     var cy=Math.round((sy[l]/a)/scale)+offY;
     var radiusPx=Math.round(eqPx/2/scale);
-    res.push({cx:cx,cy:cy,areaMm2:parseFloat((a/(pxPerMm*pxPerMm)).toFixed(4)),eqDiamMm:parseFloat((eqPx/pxPerMm).toFixed(3)),radiusPx:radiusPx});
+    res.push({cx:cx,cy:cy,areaMm2:parseFloat((a/(pxPerMm*pxPerMm)).toFixed(4)),eqDiamMm:parseFloat((eqPx/pxPerMm).toFixed(3)),radiusPx:radiusPx,circularity:parseFloat(circ.toFixed(3))});
   }
   res.sort(function(a,b){return b.areaMm2-a.areaMm2;});
   return res;
@@ -1040,8 +1135,48 @@ function saveResult(){
   if(!lastStats)return;
   var label=document.getElementById('saveLabel').value.trim();
   if(!label)label='Dataset '+(historyLog.length+1);
-  // Capture both canvases as JPEG data URLs (lower quality = smaller memory footprint)
-  var refImg=imgCanvas.toDataURL('image/jpeg',0.82);
+
+  // Build reference image from the original full-res source so it matches
+  // the annotated output (which is also drawn at img.width x img.height).
+  // Previously this used imgCanvas which is scaled to the display window.
+  var refCan=document.createElement('canvas');
+  refCan.width=img.width; refCan.height=img.height;
+  var rc=refCan.getContext('2d');
+  rc.drawImage(img,0,0);
+
+  // Draw ROI overlay at full-res scale (mirrors drawAnnotated logic exactly)
+  if(roi){
+    var lw=Math.max(1,img.width/500);
+    rc.save();
+    rc.fillStyle='rgba(0,0,0,.42)';
+    rc.fillRect(0,0,img.width,img.height);
+    rc.drawImage(img,roi.x,roi.y,roi.w,roi.h,roi.x,roi.y,roi.w,roi.h);
+    rc.strokeStyle='#f5c842'; rc.lineWidth=lw;
+    rc.setLineDash([8,4]); rc.strokeRect(roi.x,roi.y,roi.w,roi.h); rc.setLineDash([]);
+    rc.font='bold '+Math.max(11,Math.round(img.width/80))+'px system-ui';
+    rc.fillStyle='#f5c842';
+    rc.fillText('SAMPLE REGION',roi.x+8,roi.y+18);
+    rc.restore();
+  }
+
+  // Draw A/B calibration points and line at full-res scale
+  var abCols=['#5a9cf5','#f5a05a'];
+  refPoints.forEach(function(p,i){
+    rc.beginPath(); rc.arc(p.x,p.y,10,0,2*Math.PI);
+    rc.fillStyle=abCols[i]; rc.fill();
+    rc.strokeStyle='#fff'; rc.lineWidth=2; rc.stroke();
+    rc.fillStyle='#fff'; rc.font='bold 18px system-ui';
+    rc.fillText(i===0?'A':'B',p.x+13,p.y+7);
+  });
+  if(refPoints.length===2){
+    rc.beginPath();
+    rc.moveTo(refPoints[0].x,refPoints[0].y);
+    rc.lineTo(refPoints[1].x,refPoints[1].y);
+    rc.strokeStyle='rgba(255,255,255,.5)'; rc.lineWidth=1.5;
+    rc.setLineDash([6,4]); rc.stroke(); rc.setLineDash([]);
+  }
+
+  var refImg=refCan.toDataURL('image/jpeg',0.82);
   var annImg=document.getElementById('outCanvas').toDataURL('image/jpeg',0.82);
   var entry=Object.assign({},lastStats,{label:label,id:Date.now(),refImg:refImg,annImg:annImg});
   historyLog.push(entry);
