@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.12</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.13</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -773,115 +773,112 @@ function runAnalysis(){
 
 // ── Image processing ──────────────────────────────────────────────────────────
 
-// ── Edge-based DoG blob detector ──────────────────────────────────────────────
-// Uses gradient magnitude (edges) as input to DoG scale-space.
-// This finds circular RING structures (bubble walls) rather than bright discs,
-// which is correct for top-down froth photography where bubbles appear as
-// specular rings with low-contrast interiors.
+// ── Local-maxima blob detector ────────────────────────────────────────────────
+// Correct approach for specular froth images where bubbles appear as soft bright
+// discs with smooth intensity falloff — no hard edges to detect.
+// Algorithm:
+//   1. Find local intensity maxima above local background
+//   2. Estimate each bubble's radius from the radial intensity falloff curve
+//   3. NMS to remove overlapping detections
 function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
   scale=scale||1;
-  var minSigma=Math.max(0.5, minMm*pxPerMm/2/1.414);
-  var maxSigma=maxMm*pxPerMm/2/1.414;
+  var minRpx=Math.max(2,minMm*pxPerMm/2);
+  var maxRpx=maxMm*pxPerMm/2;
 
-  // Compute gradient magnitude (edge map) via Sobel
-  var edges=new Float32Array(w*h);
-  for(var y=1;y<h-1;y++){
-    for(var x=1;x<w-1;x++){
-      var gx=gray[(y-1)*w+x+1]+2*gray[y*w+x+1]+gray[(y+1)*w+x+1]
-            -gray[(y-1)*w+x-1]-2*gray[y*w+x-1]-gray[(y+1)*w+x-1];
-      var gy=gray[(y+1)*w+x-1]+2*gray[(y+1)*w+x]+gray[(y+1)*w+x+1]
-            -gray[(y-1)*w+x-1]-2*gray[(y-1)*w+x]-gray[(y-1)*w+x+1];
-      edges[y*w+x]=Math.sqrt(gx*gx+gy*gy);
-    }
+  // Step 1: Light smoothing to suppress sub-pixel noise
+  var smoothed=boxBlur(gray,w,h,1.5);
+
+  // Step 2: Estimate local background with a large blur (~1mm radius)
+  var bgSigma=Math.max(8, pxPerMm*0.8);
+  var bg=boxBlur(gray,w,h,bgSigma);
+
+  // Contrast = how much brighter each pixel is than its ~1mm neighbourhood
+  var contrast=new Float32Array(w*h);
+  var stdSum=0, stdN=0;
+  for(var i=0;i<w*h;i++){
+    contrast[i]=smoothed[i]-bg[i];
+    stdSum+=contrast[i]*contrast[i]; stdN++;
   }
+  var contrastStd=Math.sqrt(stdSum/stdN);
 
-  // Build sigma ladder
-  var sigmas=[], s=minSigma;
-  while(s<=maxSigma){sigmas.push(s); s*=1.2;}
-  if(!sigmas.length)sigmas=[minSigma];
+  // Sensitivity maps to contrast threshold: lower sens = stricter
+  var thresh=contrastStd*(1.2-(sens-1)*0.08);
+  thresh=Math.max(contrastStd*0.4, thresh);
 
-  // Per-scale normalised DoG stack: each level independently normalised
-  // so small-scale responses aren't drowned out by large-scale ones
-  var nLevels=sigmas.length;
-  var stack=new Float32Array(nLevels*w*h);  // [level][y][x]
-  var p99s=new Float32Array(nLevels);
-
-  for(var si=0;si<nLevels;si++){
-    var sigma=sigmas[si];
-    var g1=boxBlur(edges,w,h,sigma*0.5);
-    var g2=boxBlur(edges,w,h,sigma*1.5);
-    var vals=[];
-    for(var i=0;i<w*h;i++){
-      var d=Math.max(g1[i]-g2[i],0)*sigma;
-      stack[si*w*h+i]=d;
-      vals.push(d);
-    }
-    // Compute 99.5th percentile for normalisation
-    vals.sort(function(a,b){return a-b;});
-    p99s[si]=vals[Math.floor(vals.length*0.995)]||1;
-  }
-  // Normalise each level
-  for(var si=0;si<nLevels;si++){
-    var p=p99s[si];
-    if(p>0)for(var i=0;i<w*h;i++)stack[si*w*h+i]/=p;
-  }
-
-  // Threshold based on sensitivity: higher sens = lower threshold = more detections
-  var thresh=0.92-(sens-1)*0.04;  // 0.92 (sens=1) down to 0.56 (sens=10)
-  thresh=Math.max(0.4, Math.min(0.95, thresh));
-
-  // 3D local maxima search (scale × y × x)
-  var nmsR=2;
+  // Step 3: Find local maxima within a window = min bubble diameter
+  var winR=Math.max(2,Math.round(minRpx));
   var peaks=[];
-  for(var si=0;si<nLevels;si++){
-    for(var y=nmsR;y<h-nmsR;y++){
-      for(var x=nmsR;x<w-nmsR;x++){
-        var v=stack[si*w*h+y*w+x];
-        if(v<thresh)continue;
-        var isMax=true;
-        // Check spatial neighbours at same scale
-        outerNMS:for(var dy=-nmsR;dy<=nmsR;dy++){
-          for(var dx=-nmsR;dx<=nmsR;dx++){
-            if(dy===0&&dx===0)continue;
-            if(stack[si*w*h+(y+dy)*w+(x+dx)]>=v){isMax=false;break outerNMS;}
-          }
+  for(var y=winR;y<h-winR;y++){
+    for(var x=winR;x<w-winR;x++){
+      if(contrast[y*w+x]<thresh)continue;
+      // Check this is the brightest in its window
+      var v=smoothed[y*w+x];
+      var isMax=true;
+      outer:for(var dy=-winR;dy<=winR;dy++){
+        for(var dx=-winR;dx<=winR;dx++){
+          if(dy===0&&dx===0)continue;
+          if(smoothed[(y+dy)*w+(x+dx)]>=v){isMax=false;break outer;}
         }
-        if(!isMax)continue;
-        // Check adjacent scales
-        if(si>0&&stack[(si-1)*w*h+y*w+x]>=v)isMax=false;
-        if(si<nLevels-1&&stack[(si+1)*w*h+y*w+x]>=v)isMax=false;
-        if(isMax)peaks.push({x:x,y:y,sig:sigmas[si],v:v});
       }
+      if(isMax)peaks.push({x:x,y:y,v:v,c:contrast[y*w+x]});
     }
   }
 
-  // Convert to bubbles, size filter, NMS overlap removal
-  var raw=peaks.map(function(p){
-    return{x:p.x,y:p.y,rpx:p.sig*1.414,diam:p.sig*1.414*2/pxPerMm,v:p.v};
-  }).filter(function(b){return b.diam>=minMm&&b.diam<=maxMm;});
+  // Step 4: For each peak, estimate radius from radial intensity falloff
+  // Radius = distance where intensity drops to 40% of peak contrast above background
+  var angles=[0,0.785,1.571,2.356,3.14,3.927,4.712,5.498]; // 8 directions
+  var results=[];
+  for(var pi=0;pi<peaks.length;pi++){
+    var pk=peaks[pi];
+    var cx=pk.x, cy=pk.y;
+    var peakVal=smoothed[cy*w+cx];
+    var bgVal=bg[cy*w+cx];
+    var halfTarget=bgVal+(peakVal-bgVal)*0.4;
 
-  raw.sort(function(a,b){return b.v-a.v;});
-  var kept=[];
-  raw.forEach(function(b){
-    for(var k=0;k<kept.length;k++){
-      var dx=b.x-kept[k].x, dy=b.y-kept[k].y;
-      if(Math.sqrt(dx*dx+dy*dy)<(b.rpx+kept[k].rpx)*0.5)return;
+    var foundR=0;
+    for(var r=1;r<=maxRpx;r++){
+      var ringSum=0, ringN=0;
+      for(var ai=0;ai<angles.length;ai++){
+        var ry=Math.round(cy+r*Math.sin(angles[ai]));
+        var rx=Math.round(cx+r*Math.cos(angles[ai]));
+        if(ry>=0&&ry<h&&rx>=0&&rx<w){ringSum+=smoothed[ry*w+rx];ringN++;}
+      }
+      if(ringN===0)break;
+      if(ringSum/ringN<halfTarget){foundR=r;break;}
     }
-    kept.push(b);
-  });
+    if(foundR<1)foundR=Math.round(minRpx);
+    var diam=foundR*2/pxPerMm;
+    if(diam<minMm||diam>maxMm)continue;
+    results.push({x:cx,y:cy,rpx:foundR,diam:diam,v:pk.c});
+  }
 
-  // Map back to original image space
-  var results=kept.map(function(b){
-    var cx=Math.round(b.x/scale)+offX;
-    var cy=Math.round(b.y/scale)+offY;
+  // Step 5: NMS — remove overlapping detections, keep stronger ones
+  results.sort(function(a,b){return b.v-a.v;});
+  var kept=[];
+  for(var ri=0;ri<results.length;ri++){
+    var b=results[ri];
+    var skip=false;
+    for(var ki=0;ki<kept.length;ki++){
+      var k=kept[ki];
+      var dx=b.x-k.x, dy=b.y-k.y;
+      if(Math.sqrt(dx*dx+dy*dy)<(b.rpx+k.rpx)*0.6){skip=true;break;}
+    }
+    if(!skip)kept.push(b);
+  }
+
+  // Map back to original image coordinates
+  var out=kept.map(function(b){
+    var imgX=Math.round(b.x/scale)+offX;
+    var imgY=Math.round(b.y/scale)+offY;
     var radiusPx=Math.max(1,Math.round(b.rpx/scale));
     var areaMm2=parseFloat((Math.PI*b.rpx*b.rpx/(pxPerMm*pxPerMm)).toFixed(4));
-    return{cx:cx,cy:cy,eqDiamMm:parseFloat(b.diam.toFixed(3)),areaMm2:areaMm2,radiusPx:radiusPx,circularity:1};
+    return{cx:imgX,cy:imgY,eqDiamMm:parseFloat(b.diam.toFixed(3)),areaMm2:areaMm2,radiusPx:radiusPx,circularity:1};
   });
-  results.sort(function(a,b){return b.areaMm2-a.areaMm2;});
-  return results;
+  out.sort(function(a,b){return b.areaMm2-a.areaMm2;});
+  return out;
 }
 
+// Fast separable box blur — used by detector
 // Fast separable box blur — used by DoG detector
 function boxBlur(src,w,h,sigma){
   // Approximate Gaussian with 3 passes of box blur; radius = sigma * sqrt(3)
