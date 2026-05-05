@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.2</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.3</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -1002,8 +1002,46 @@ function saveResult(){
   if(!lastStats)return;
   var label=document.getElementById('saveLabel').value.trim();
   if(!label)label='Dataset '+(historyLog.length+1);
-  // Capture both canvases as JPEG data URLs (lower quality = smaller memory footprint)
-  var refImg=imgCanvas.toDataURL('image/jpeg',0.82);
+
+  // Build reference image from original full-res source so it matches the annotated output
+  var refCan=document.createElement('canvas');
+  refCan.width=img.width; refCan.height=img.height;
+  var rc=refCan.getContext('2d');
+  rc.drawImage(img,0,0);
+
+  // Draw ROI overlay at full-res scale (mirrors drawAnnotated logic)
+  if(roi){
+    var lw=Math.max(1,img.width/500);
+    rc.save();
+    rc.fillStyle='rgba(0,0,0,.42)';
+    rc.fillRect(0,0,img.width,img.height);
+    rc.drawImage(img,roi.x,roi.y,roi.w,roi.h,roi.x,roi.y,roi.w,roi.h);
+    rc.strokeStyle='#f5c842'; rc.lineWidth=lw;
+    rc.setLineDash([8,4]); rc.strokeRect(roi.x,roi.y,roi.w,roi.h); rc.setLineDash([]);
+    rc.font='bold '+Math.max(11,Math.round(img.width/80))+'px system-ui';
+    rc.fillStyle='#f5c842';
+    rc.fillText('SAMPLE REGION',roi.x+8,roi.y+18);
+    rc.restore();
+  }
+
+  // Draw A/B calibration points at full-res scale
+  var cols=['#5a9cf5','#f5a05a'];
+  refPoints.forEach(function(p,i){
+    rc.beginPath(); rc.arc(p.x,p.y,10,0,2*Math.PI);
+    rc.fillStyle=cols[i]; rc.fill();
+    rc.strokeStyle='#fff'; rc.lineWidth=2; rc.stroke();
+    rc.fillStyle='#fff'; rc.font='bold 18px system-ui';
+    rc.fillText(i===0?'A':'B',p.x+13,p.y+7);
+  });
+  if(refPoints.length===2){
+    rc.beginPath();
+    rc.moveTo(refPoints[0].x,refPoints[0].y);
+    rc.lineTo(refPoints[1].x,refPoints[1].y);
+    rc.strokeStyle='rgba(255,255,255,.5)'; rc.lineWidth=1.5;
+    rc.setLineDash([6,4]); rc.stroke(); rc.setLineDash([]);
+  }
+
+  var refImg=refCan.toDataURL('image/jpeg',0.82);
   var annImg=document.getElementById('outCanvas').toDataURL('image/jpeg',0.82);
   var entry=Object.assign({},lastStats,{label:label,id:Date.now(),refImg:refImg,annImg:annImg});
   historyLog.push(entry);
