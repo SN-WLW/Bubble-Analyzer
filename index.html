@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.5</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.6</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -740,75 +740,80 @@ function runAnalysis(){
 
   // Sensitivity slider: 1=strictest, 10=most sensitive
   var sens=parseInt(document.getElementById('sensitivitySlider').value)||5;
-  // Blur radius scales with sensitivity and image resolution
-  var blurR=Math.max(1, Math.round((12-sens) * analysisPixPerMm * 0.3));
-  var blurred=gaussianBlurR(gray,canW,canH,blurR);
-  // Adaptive threshold block size: scales with px/mm so it's resolution-independent
-  var blockMm=0.4+((11-sens)*0.18);
-  var blockPx=Math.max(7, Math.round(blockMm*analysisPixPerMm)); // odd
+
+  // Blur: small fixed radius (2-6px) — just enough to smooth sub-pixel noise.
+  // Do NOT scale by pxPerMm: that produces huge radii that destroy bubble contrast.
+  var blurR=Math.max(1, Math.min(6, Math.round(1 + (10-sens)*0.5)));
+
+  // Adaptive threshold block: scales with px/mm to be resolution-independent.
+  // Block covers ~1-3mm at the froth plane so it spans several bubble widths.
+  var blockMm=1.0+((11-sens)*0.2);
+  var blockPx=Math.max(11, Math.round(blockMm*analysisPixPerMm));
   if(blockPx%2===0)blockPx++;
-  var C=2+((11-sens)*0.6);
-  var binary=adaptiveThreshold(blurred,canW,canH,blockPx,C);
-  // Morphological open radius scales with resolution to remove grain
-  var morphR=Math.max(1, Math.round(analysisPixPerMm*0.04*(11-sens)*0.5));
-  var opened=morphOpenR(binary,canW,canH,morphR);
-  var filled=fillHoles(opened,canW,canH);
-  var lab=connectedComponents(filled,canW,canH);
-  var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
-  showResults(bubbles);
-  drawAnnotated(bubbles,srcX,srcY,srcW,srcH);
+  // Hard cap: never exceed 10% of the smaller canvas dimension (keeps it fast)
+  blockPx=Math.min(blockPx, Math.floor(Math.min(canW,canH)*0.10)|1);
+  if(blockPx%2===0)blockPx--;
+
+  var C=3+((11-sens)*0.5);
+
+  // Morph open: 1-3px only. Larger values are O(r²·N) and freeze the browser.
+  var morphR=Math.min(3, Math.max(1, Math.round((11-sens)*0.3)));
+
+  runBtn.disabled=true;
+  runBtn.textContent='Analyzing…';
+
+  // Defer heavy work so UI can update first
+  setTimeout(function(){
+    var blurred=gaussianBlurR(gray,canW,canH,blurR);
+    var binary=adaptiveThreshold(blurred,canW,canH,blockPx,C);
+    var opened=morphOpenR(binary,canW,canH,morphR);
+    var filled=fillHoles(opened,canW,canH);
+    var lab=connectedComponents(filled,canW,canH);
+    var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
+    runBtn.disabled=false;
+    runBtn.textContent='Analyze bubbles';
+    showResults(bubbles);
+    drawAnnotated(bubbles,srcX,srcY,srcW,srcH);
+  },30);
 }
 
 // ── Image processing ──────────────────────────────────────────────────────────
 
 // ── Image processing ──────────────────────────────────────────────────────────
-// Variable-radius Gaussian blur using box-blur approximation (fast, accurate enough)
+// Fast separable box blur (single pass, correct sliding window)
 function gaussianBlurR(gray,w,h,r){
   if(r<1)return new Float32Array(gray);
-  // Three-pass box blur approximates Gaussian well
   var src=new Float32Array(gray);
-  for(var pass=0;pass<3;pass++){
-    var tmp=new Float32Array(w*h);
-    // Horizontal
-    for(var y=0;y<h;y++){
-      var s=0,c=0;
-      for(var x=0;x<w;x++){
-        s+=src[y*w+x];c++;
-        if(x>r){s-=src[y*w+x-r-1];c--;}
-        tmp[y*w+Math.min(x,w-1)+(x<r?0:0)]=s/c;
-      }
-      // sliding window horizontal
-      var rowS=0;
-      for(var x2=0;x2<Math.min(r,w);x2++)rowS+=src[y*w+x2];
-      var cnt=Math.min(r,w);
-      for(var x2=0;x2<w;x2++){
-        if(x2+r<w){rowS+=src[y*w+x2+r];cnt++;}
-        if(x2-r-1>=0){rowS-=src[y*w+x2-r-1];cnt--;}
-        tmp[y*w+x2]=rowS/cnt;
-      }
-    }
-    var tmp2=new Float32Array(w*h);
-    // Vertical
+  var tmp=new Float32Array(w*h);
+  var out=new Float32Array(w*h);
+  var d=r*2+1;
+  // Horizontal pass
+  for(var y=0;y<h;y++){
+    var s=0;
+    for(var x=0;x<d&&x<w;x++)s+=src[y*w+x];
     for(var x=0;x<w;x++){
-      var colS=0,cnt2=0;
-      for(var y2=0;y2<Math.min(r,h);y2++){colS+=tmp[y2*w+x];cnt2++;}
-      for(var y2=0;y2<h;y2++){
-        if(y2+r<h){colS+=tmp[(y2+r)*w+x];cnt2++;}
-        if(y2-r-1>=0){colS-=tmp[(y2-r-1)*w+x];cnt2--;}
-        tmp2[y2*w+x]=colS/cnt2;
-      }
+      if(x+r<w)s+=src[y*w+x+r]; else if(x===0){}
+      if(x-r-1>=0)s-=src[y*w+x-r-1];
+      var lo=Math.max(0,x-r),hi=Math.min(w-1,x+r);
+      tmp[y*w+x]=s/(hi-lo+1);
     }
-    src=tmp2;
   }
-  return src;
-}
-// Legacy small fixed blur kept for reference
-function gaussianBlur(gray,w,h){
-  var k=[1,4,6,4,1],tmp=new Float32Array(w*h),out=new Float32Array(w*h);
-  for(var y=0;y<h;y++)for(var x=0;x<w;x++){var s=0,ws=0;for(var d=-2;d<=2;d++){var nx=x+d;if(nx>=0&&nx<w){s+=gray[y*w+nx]*k[d+2];ws+=k[d+2];}}tmp[y*w+x]=s/ws;}
-  for(var y=0;y<h;y++)for(var x=0;x<w;x++){var s=0,ws=0;for(var d=-2;d<=2;d++){var ny=y+d;if(ny>=0&&ny<h){s+=tmp[ny*w+x]*k[d+2];ws+=k[d+2];}}out[y*w+x]=s/ws;}
+  // Re-init for vertical pass
+  for(var y=0;y<h;y++){var s=0;for(var x=0;x<d&&x<h;x++)s+=tmp[x*w+y%w];}
+  for(var x=0;x<w;x++){
+    var s=0;
+    for(var y=0;y<d&&y<h;y++)s+=tmp[y*w+x];
+    for(var y=0;y<h;y++){
+      if(y+r<h)s+=tmp[(y+r)*w+x];
+      if(y-r-1>=0)s-=tmp[(y-r-1)*w+x];
+      var lo=Math.max(0,y-r),hi=Math.min(h-1,y+r);
+      out[y*w+x]=s/(hi-lo+1);
+    }
+  }
   return out;
 }
+// Legacy small fixed blur
+function gaussianBlur(gray,w,h){return gaussianBlurR(gray,w,h,2);}
 function adaptiveThreshold(gray,w,h,bs,C){
   var half=Math.floor(bs/2),bin=new Uint8Array(w*h);
   for(var y=0;y<h;y++)for(var x=0;x<w;x++){var s=0,c=0;for(var dy=-half;dy<=half;dy++)for(var dx=-half;dx<=half;dx++){var ny=y+dy,nx=x+dx;if(ny>=0&&ny<h&&nx>=0&&nx<w){s+=gray[ny*w+nx];c++;}}bin[y*w+x]=(gray[y*w+x]<s/c-C)?1:0;}
