@@ -179,7 +179,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.18</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.19</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -584,17 +584,66 @@ function showCorrBox(){
   box.innerHTML=html; box.style.display='';
 }
 
+// ── Image adjustment helpers ──────────────────────────────────────────────────
+// Standard photo-editor contrast (S-curve, matches Windows Photos / Lightroom feel)
+// contrast: -100..100
+function applyContrastLUT(data, contrast){
+  if(contrast===0)return;
+  // Scale slider (-50..50) to (-255..255) working range
+  var c=contrast*(255/50);
+  var factor=(259*(c+255))/(255*(259-c));
+  for(var i=0;i<data.length;i+=4){
+    data[i]  =Math.max(0,Math.min(255, factor*(data[i]  -128)+128));
+    data[i+1]=Math.max(0,Math.min(255, factor*(data[i+1]-128)+128));
+    data[i+2]=Math.max(0,Math.min(255, factor*(data[i+2]-128)+128));
+  }
+}
+// Unsharp mask on RGBA pixel data — matches Windows Photos sharpness
+// sigma is in canvas pixels; amount 0..3
+function applySharpnessRGBA(data, w, h, sigma, amount){
+  if(amount===0)return;
+  var r2=new Float32Array(data.length/4);
+  var g2=new Float32Array(data.length/4);
+  var b2=new Float32Array(data.length/4);
+  for(var i=0;i<data.length;i+=4){
+    var p=i/4; r2[p]=data[i]; g2[p]=data[i+1]; b2[p]=data[i+2];
+  }
+  // Separable box blur approximation of Gaussian
+  var blurR=Math.max(1,Math.round(sigma*1.73));
+  function blurCh(src){
+    var t=new Float32Array(w*h), o=new Float32Array(w*h);
+    for(var y=0;y<h;y++){var s=0,c=0;for(var x=0;x<Math.min(blurR,w);x++){s+=src[y*w+x];c++;}for(var x=0;x<w;x++){if(x+blurR<w){s+=src[y*w+x+blurR];c++;}if(x-blurR-1>=0){s-=src[y*w+x-blurR-1];c--;}t[y*w+x]=s/c;}}
+    for(var x=0;x<w;x++){var s=0,c=0;for(var y=0;y<Math.min(blurR,h);y++){s+=t[y*w+x];c++;}for(var y=0;y<h;y++){if(y+blurR<h){s+=t[(y+blurR)*w+x];c++;}if(y-blurR-1>=0){s-=t[(y-blurR-1)*w+x];c--;}o[y*w+x]=s/c;}}
+    return o;
+  }
+  var rb=blurCh(r2),gb=blurCh(g2),bb=blurCh(b2);
+  for(var i=0;i<data.length;i+=4){
+    var p=i/4;
+    data[i]  =Math.max(0,Math.min(255, data[i]  +amount*(data[i]  -rb[p])));
+    data[i+1]=Math.max(0,Math.min(255, data[i+1]+amount*(data[i+1]-gb[p])));
+    data[i+2]=Math.max(0,Math.min(255, data[i+2]+amount*(data[i+2]-bb[p])));
+  }
+}
+
 // ── Redraw ────────────────────────────────────────────────────────────────────
 function redraw(){
-  // Apply contrast and sharpness as CSS filter for canvas preview
+  ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
   var cAdj=parseInt((document.getElementById('contrastSlider')||{value:0}).value)||0;
   var sAdj=parseInt((document.getElementById('sharpnessSlider')||{value:0}).value)||0;
-  var contrastPct=100+cAdj*2;
-  // CSS doesn't have a sharpness filter — use saturate/brightness as proxy,
-  // actual sharpness is applied to pixel data during analysis
-  ctx.filter='contrast('+contrastPct+'%)';
-  ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
-  ctx.filter='none';
+  if(cAdj!==0||sAdj!==0){
+    var id=ctx.getImageData(0,0,imgCanvas.width,imgCanvas.height);
+    if(cAdj!==0) applyContrastLUT(id.data, cAdj);
+    if(sAdj!==0){
+      // sigma=1.5px fixed (fine detail), amount scales with slider
+      var amount=sAdj>0?sAdj*0.4:-sAdj*0.6;
+      applySharpnessRGBA(id.data, imgCanvas.width, imgCanvas.height, 1.5, sAdj>0?amount:-amount);
+      if(sAdj<0){
+        // negative = blur: blend blurred result over original
+        // already handled in applySharpnessRGBA with negative amount direction
+      }
+    }
+    ctx.putImageData(id,0,0);
+  }
 
   // All coords are in image pixel space — convert to canvas pixels for drawing
   var cx=imgCanvas.width /img.width;
@@ -728,28 +777,24 @@ function runAnalysis(){
   var contrastAdj=parseInt(document.getElementById('contrastSlider').value)||0;
   var sharpAdj=parseInt(document.getElementById('sharpnessSlider').value)||0;
 
-  // Apply contrast adjustment: shift each pixel toward/away from midpoint (128)
+  // Contrast: standard S-curve formula (matches Windows Photos / Lightroom)
   if(contrastAdj!==0){
-    var factor=(contrastAdj>0)?(1+contrastAdj/50*2):(1+contrastAdj/50);
-    for(var i=0;i<gray.length;i++){
-      gray[i]=Math.max(0,Math.min(255, 128+(gray[i]-128)*factor));
-    }
+    var cScale=contrastAdj*(255/50);
+    var cFactor=(259*(cScale+255))/(255*(259-cScale));
+    for(var i=0;i<gray.length;i++)
+      gray[i]=Math.max(0,Math.min(255, cFactor*(gray[i]-128)+128));
   }
 
-  // Apply sharpness: unsharp mask (positive) or blur (negative)
-  // Uses the fast separable boxBlur already in the codebase — not a nested loop.
+  // Sharpness: unsharp mask (positive) or gentle blur (negative)
+  // Fixed sigma so effect is consistent regardless of image resolution
   if(sharpAdj!==0){
-    // Blur radius scales with image resolution so effect is visible at any scale
-    var sharpBlurR=Math.round(analysisPixPerMm*0.08);  // ~5px per mm
-    sharpBlurR=Math.max(2,Math.min(20,sharpBlurR));
-    var blurred2=boxBlur(gray,canW,canH,sharpBlurR);
+    var sharpSigma=1.5;  // fine-detail radius matching Windows Photos feel
+    var blurred2=boxBlur(gray,canW,canH,Math.round(sharpSigma*1.73));
     if(sharpAdj>0){
-      // Unsharp mask: sharpen by adding scaled difference between original and blurred
-      var amount=sharpAdj*0.5;
+      var amount=sharpAdj*0.4;
       for(var i=0;i<gray.length;i++)
         gray[i]=Math.max(0,Math.min(255, gray[i]+amount*(gray[i]-blurred2[i])));
     }else{
-      // Blur: blend toward blurred version by slider amount
       var blend=Math.abs(sharpAdj)/5;
       for(var i=0;i<gray.length;i++)
         gray[i]=gray[i]*(1-blend)+blurred2[i]*blend;
