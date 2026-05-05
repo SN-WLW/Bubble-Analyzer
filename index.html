@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.9</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.11</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -596,13 +596,14 @@ function showCorrBox(){
   var scale=Math.min(1, 2048/Math.max(img.width,img.height));
   var aPxMm=(pxPerMmFroth*scale).toFixed(2);
   var maxBubPx=maxBubMm*pxPerMmFroth*scale;
-  var bPx=Math.round(maxBubPx*(2+(11-sens)*0.4));
+  var bPx=Math.round(maxBubPx*(0.5+(sens-1)*0.08));
   bPx=Math.max(11,bPx); bPx=Math.min(bPx,Math.floor(Math.min(img.width,img.height)*scale*0.25)); if(bPx%2===0)bPx++;
   var blurR=Math.max(1,Math.min(6,Math.round(1+(10-sens)*0.5)));
+  var cVal=(8-(sens-1)*0.6).toFixed(1);
   var html='<strong>Calibration</strong> &nbsp;px/mm rim: <strong>'+pxPerMmRim.toFixed(1)+'</strong>'
     +(zDepthMm>0?' → froth: <strong>'+pxPerMmFroth.toFixed(1)+'</strong>':'')
     +'<br>Analysis px/mm (after scale): <strong>'+aPxMm+'</strong> | scale: <strong>'+scale.toFixed(3)+'</strong>'
-    +'<br><strong>Pipeline</strong> &nbsp;blurR: <strong>'+blurR+'px</strong> | blockPx: <strong>'+bPx+'px</strong> ('+((bPx/pxPerMmFroth/scale).toFixed(2))+'mm) | morphR: <strong>'+Math.min(3,Math.max(1,Math.round((11-sens)*0.3)))+'px</strong>'
+    +'<br><strong>Pipeline</strong> &nbsp;blurR: <strong>'+blurR+'px</strong> | blockPx: <strong>'+bPx+'px</strong> ('+((bPx/pxPerMmFroth/scale).toFixed(2))+'mm) | C: <strong>'+cVal+'</strong> | morphR: <strong>'+Math.min(3,Math.max(1,Math.round((11-sens)*0.3)))+'px</strong>'
     +'<br>maxBubble: <strong>'+maxBubMm+'mm = '+maxBubPx.toFixed(0)+'px</strong> at analysis scale';
   box.innerHTML=html; box.style.display='';
 }
@@ -742,51 +743,27 @@ function runAnalysis(){
   var data=id.data;
 
   // Extract greyscale based on selected channel mode
-  var gray=new Uint8Array(canW*canH);
+  var gray=new Float32Array(canW*canH);
   for(var i=0;i<canW*canH;i++){
     var r=data[i*4], g=data[i*4+1], b=data[i*4+2];
     var lum;
     if(imgMonochrome==='green')       lum=g;
     else if(imgMonochrome==='red')    lum=r;
     else if(imgMonochrome==='blue')   lum=b;
-    else if(imgMonochrome==='mono')   lum=Math.round(0.299*r+0.587*g+0.114*b);
-    else                              lum=Math.round(0.299*r+0.587*g+0.114*b);
+    else lum=0.299*r+0.587*g+0.114*b;
     gray[i]=imgPolarity==='invert'?(255-lum):lum;
   }
 
-  // Sensitivity slider: 1=strictest, 10=most sensitive
   var sens=parseInt(document.getElementById('sensitivitySlider').value)||5;
-
-  // Blur: small fixed radius — just enough to smooth sub-pixel noise.
-  var blurR=Math.max(1, Math.min(6, Math.round(1 + (10-sens)*0.5)));
-
-  // Adaptive threshold block: must be LARGER than the biggest bubble but
-  // small enough to track background variation. Cap at ~8x the max bubble
-  // diameter in pixels, but no larger than 25% of the canvas short side.
-  // This prevents the block from being so large it encompasses entire bubbles
-  // (which makes the local mean == the bubble itself → no detection).
-  var maxBubblePx = parseFloat(document.getElementById('maxBubbleMm').value||3) * analysisPixPerMm;
-  var blockPx = Math.round(maxBubblePx * (2 + (11-sens)*0.4));
-  blockPx = Math.max(11, blockPx);
-  blockPx = Math.min(blockPx, Math.floor(Math.min(canW,canH)*0.25));
-  if(blockPx%2===0) blockPx++;  // must be odd — do this AFTER all caps
-
-  var C=3+((11-sens)*0.5);
-
-  // Morph open: 1-3px only.
-  var morphR=Math.min(3, Math.max(1, Math.round((11-sens)*0.3)));
+  var minMm=parseFloat(document.getElementById('minBubbleMm').value)||0.05;
+  var maxMm=parseFloat(document.getElementById('maxBubbleMm').value)||3.0;
+  var minCirc=parseFloat(document.getElementById('minCircularity').value)||0.5;
 
   runBtn.disabled=true;
   runBtn.textContent='Analyzing…';
 
-  // Defer heavy work so UI can update first
   setTimeout(function(){
-    var blurred=gaussianBlurR(gray,canW,canH,blurR);
-    var binary=adaptiveThreshold(blurred,canW,canH,blockPx,C);
-    var opened=morphOpenR(binary,canW,canH,morphR);
-    var filled=fillHoles(opened,canW,canH);
-    var lab=connectedComponents(filled,canW,canH);
-    var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
+    var bubbles=dogDetect(gray,canW,canH,analysisPixPerMm,minMm,maxMm,sens,minCirc,srcX,srcY,scale);
     runBtn.disabled=false;
     runBtn.textContent='Analyze bubbles';
     showResults(bubbles);
@@ -796,8 +773,123 @@ function runAnalysis(){
 
 // ── Image processing ──────────────────────────────────────────────────────────
 
-// ── Image processing ──────────────────────────────────────────────────────────
-// Fast separable box blur (single pass, correct sliding window)
+// ── DoG blob detector ─────────────────────────────────────────────────────────
+// Difference of Gaussians multi-scale blob detection.
+// Finds bright (or dark) circular blobs at any scale within [minMm, maxMm].
+// Much more accurate than adaptive threshold for specular bubble images.
+function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
+  scale=scale||1;
+  var minRpx=minMm*pxPerMm/2, maxRpx=maxMm*pxPerMm/2;
+
+  // Build sigma ladder: sigma ≈ radius/sqrt(2) for LoG/DoG blob response peak
+  var sigmas=[], s=Math.max(0.8, minRpx/1.5);
+  while(s<=maxRpx/1.2){sigmas.push(s); s*=1.35;}
+  if(!sigmas.length)sigmas=[1];
+
+  // Threshold multiplier from sensitivity: lower sens = stricter
+  var threshFrac = 0.005 + (sens-1)*0.003; // 0.005 (sens=1) .. 0.032 (sens=10)
+
+  // Compute scale-normalised DoG responses and track per-pixel max
+  var dogMax=new Float32Array(w*h);
+  var sigMap=new Float32Array(w*h);
+
+  var prevBlur=boxBlur(gray,w,h,sigmas[0]*0.9);
+  for(var si=0;si<sigmas.length;si++){
+    var sigma=sigmas[si];
+    var curBlur=boxBlur(gray,w,h,sigma);
+    var nextSig=si+1<sigmas.length?sigmas[si+1]:sigma*1.35;
+    var nextBlur=boxBlur(gray,w,h,nextSig);
+    for(var i=0;i<w*h;i++){
+      // Scale-normalised DoG: multiply by sigma^2 to equalise response across scales
+      var d=(curBlur[i]-nextBlur[i])*sigma*sigma;
+      if(d>dogMax[i]){dogMax[i]=d; sigMap[i]=sigma;}
+    }
+    prevBlur=curBlur;
+  }
+
+  // Global threshold on DoG response
+  var maxResp=0;
+  for(var i=0;i<w*h;i++)if(dogMax[i]>maxResp)maxResp=dogMax[i];
+  var thresh=maxResp*threshFrac;
+
+  // Find local maxima in 2D DoG map (non-maximum suppression, 5x5 window)
+  var peaks=[];
+  var nmsR=3;
+  for(var y=nmsR;y<h-nmsR;y++){
+    for(var x=nmsR;x<w-nmsR;x++){
+      var v=dogMax[y*w+x];
+      if(v<thresh)continue;
+      var isMax=true;
+      outer2:for(var dy=-nmsR;dy<=nmsR;dy++){
+        for(var dx=-nmsR;dx<=nmsR;dx++){
+          if(dy===0&&dx===0)continue;
+          if(dogMax[(y+dy)*w+(x+dx)]>=v){isMax=false;break outer2;}
+        }
+      }
+      if(isMax)peaks.push({x:x,y:y,sig:sigMap[y*w+x],v:v});
+    }
+  }
+
+  // Convert peaks to bubble measurements + NMS overlap removal
+  var raw=peaks.map(function(p){
+    var rpx=p.sig*Math.sqrt(2);
+    var diam=rpx*2/pxPerMm;
+    return {x:p.x,y:p.y,rpx:rpx,diam:diam,v:p.v};
+  }).filter(function(b){return b.diam>=minMm&&b.diam<=maxMm;});
+
+  // Sort by response strength, apply NMS
+  raw.sort(function(a,b){return b.v-a.v;});
+  var kept=[];
+  raw.forEach(function(b){
+    for(var k=0;k<kept.length;k++){
+      var dist=Math.sqrt((b.x-kept[k].x)*(b.x-kept[k].x)+(b.y-kept[k].y)*(b.y-kept[k].y));
+      if(dist<(b.rpx+kept[k].rpx)*0.65)return;
+    }
+    kept.push(b);
+  });
+
+  // Map back to original image coordinates and format for showResults/drawAnnotated
+  var results=kept.map(function(b){
+    var cx=Math.round(b.x/scale)+offX;
+    var cy=Math.round(b.y/scale)+offY;
+    var radiusPx=Math.round(b.rpx/scale);
+    var areaMm2=parseFloat((Math.PI*b.rpx*b.rpx/(pxPerMm*pxPerMm)).toFixed(4));
+    return{cx:cx,cy:cy,eqDiamMm:parseFloat(b.diam.toFixed(3)),areaMm2:areaMm2,radiusPx:radiusPx,circularity:1};
+  });
+  results.sort(function(a,b){return b.areaMm2-a.areaMm2;});
+  return results;
+}
+
+// Fast separable box blur — used by DoG detector
+function boxBlur(src,w,h,sigma){
+  // Approximate Gaussian with 3 passes of box blur; radius = sigma * sqrt(3)
+  var r=Math.max(1,Math.round(sigma*1.73));
+  var tmp=new Float32Array(w*h);
+  var out=new Float32Array(w*h);
+  // Horizontal
+  for(var y=0;y<h;y++){
+    var s=0,c=0;
+    for(var x=0;x<Math.min(r,w);x++){s+=src[y*w+x];c++;}
+    for(var x=0;x<w;x++){
+      if(x+r<w){s+=src[y*w+x+r];c++;}
+      if(x-r-1>=0){s-=src[y*w+x-r-1];c--;}
+      tmp[y*w+x]=s/c;
+    }
+  }
+  // Vertical
+  for(var x=0;x<w;x++){
+    var s=0,c=0;
+    for(var y=0;y<Math.min(r,h);y++){s+=tmp[y*w+x];c++;}
+    for(var y=0;y<h;y++){
+      if(y+r<h){s+=tmp[(y+r)*w+x];c++;}
+      if(y-r-1>=0){s-=tmp[(y-r-1)*w+x];c--;}
+      out[y*w+x]=s/c;
+    }
+  }
+  return out;
+}
+
+// ── Legacy processing functions (kept for reference) ──────────────────────────
 function gaussianBlurR(gray,w,h,r){
   if(r<1)return new Float32Array(gray);
   var src=new Float32Array(gray);
