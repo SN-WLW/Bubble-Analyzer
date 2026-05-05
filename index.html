@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.6</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.7</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -581,13 +581,20 @@ function showCorrBox(){
   if(!pxPerMmFroth){box.style.display='none';return;}
   var r=imgCanvas.getBoundingClientRect();
   var rimPx=refPoints.length===2?ptDist(refPoints[0],refPoints[1]).toFixed(1):'?';
-  var html='<strong>DEBUG</strong><br>'
-    +'window.innerWidth: <strong>'+window.innerWidth+'</strong> | DPR: <strong>'+window.devicePixelRatio+'</strong><br>'
-    +'canvas.width: <strong>'+imgCanvas.width+'</strong> | canvas.height: <strong>'+imgCanvas.height+'</strong><br>'
-    +'canvas display (rect): <strong>'+Math.round(r.width)+'x'+Math.round(r.height)+'</strong><br>'
-    +'img.width: <strong>'+img.width+'</strong> | img.height: <strong>'+img.height+'</strong><br>'
-    +'Rim span (img-px): <strong>'+rimPx+'</strong> | px/mm rim: <strong>'+pxPerMmRim.toFixed(3)+'</strong><br>'
-    +'A:('+Math.round(refPoints[0].x)+','+Math.round(refPoints[0].y)+') B:('+Math.round(refPoints[1].x)+','+Math.round(refPoints[1].y)+')';
+  // Compute pipeline preview values
+  var sens=parseInt((document.getElementById('sensitivitySlider')||{value:5}).value)||5;
+  var maxBubMm=parseFloat((document.getElementById('maxBubbleMm')||{value:3}).value)||3;
+  var scale=Math.min(1, 2048/Math.max(img.width,img.height));
+  var aPxMm=(pxPerMmFroth*scale).toFixed(2);
+  var maxBubPx=maxBubMm*pxPerMmFroth*scale;
+  var bPx=Math.round(maxBubPx*(2+(11-sens)*0.4));
+  bPx=Math.max(11,bPx); bPx=Math.min(bPx,Math.floor(Math.min(img.width,img.height)*scale*0.25)); if(bPx%2===0)bPx++;
+  var blurR=Math.max(1,Math.min(6,Math.round(1+(10-sens)*0.5)));
+  var html='<strong>Calibration</strong> &nbsp;px/mm rim: <strong>'+pxPerMmRim.toFixed(1)+'</strong>'
+    +(zDepthMm>0?' → froth: <strong>'+pxPerMmFroth.toFixed(1)+'</strong>':'')
+    +'<br>Analysis px/mm (after scale): <strong>'+aPxMm+'</strong> | scale: <strong>'+scale.toFixed(3)+'</strong>'
+    +'<br><strong>Pipeline</strong> &nbsp;blurR: <strong>'+blurR+'px</strong> | blockPx: <strong>'+bPx+'px</strong> ('+((bPx/pxPerMmFroth/scale).toFixed(2))+'mm) | morphR: <strong>'+Math.min(3,Math.max(1,Math.round((11-sens)*0.3)))+'px</strong>'
+    +'<br>maxBubble: <strong>'+maxBubMm+'mm = '+maxBubPx.toFixed(0)+'px</strong> at analysis scale';
   box.innerHTML=html; box.style.display='';
 }
 
@@ -741,22 +748,23 @@ function runAnalysis(){
   // Sensitivity slider: 1=strictest, 10=most sensitive
   var sens=parseInt(document.getElementById('sensitivitySlider').value)||5;
 
-  // Blur: small fixed radius (2-6px) — just enough to smooth sub-pixel noise.
-  // Do NOT scale by pxPerMm: that produces huge radii that destroy bubble contrast.
+  // Blur: small fixed radius — just enough to smooth sub-pixel noise.
   var blurR=Math.max(1, Math.min(6, Math.round(1 + (10-sens)*0.5)));
 
-  // Adaptive threshold block: scales with px/mm to be resolution-independent.
-  // Block covers ~1-3mm at the froth plane so it spans several bubble widths.
-  var blockMm=1.0+((11-sens)*0.2);
-  var blockPx=Math.max(11, Math.round(blockMm*analysisPixPerMm));
-  if(blockPx%2===0)blockPx++;
-  // Hard cap: never exceed 10% of the smaller canvas dimension (keeps it fast)
-  blockPx=Math.min(blockPx, Math.floor(Math.min(canW,canH)*0.10)|1);
-  if(blockPx%2===0)blockPx--;
+  // Adaptive threshold block: must be LARGER than the biggest bubble but
+  // small enough to track background variation. Cap at ~8x the max bubble
+  // diameter in pixels, but no larger than 25% of the canvas short side.
+  // This prevents the block from being so large it encompasses entire bubbles
+  // (which makes the local mean == the bubble itself → no detection).
+  var maxBubblePx = parseFloat(document.getElementById('maxBubbleMm').value||3) * analysisPixPerMm;
+  var blockPx = Math.round(maxBubblePx * (2 + (11-sens)*0.4));
+  blockPx = Math.max(11, blockPx);
+  blockPx = Math.min(blockPx, Math.floor(Math.min(canW,canH)*0.25));
+  if(blockPx%2===0) blockPx++;  // must be odd — do this AFTER all caps
 
   var C=3+((11-sens)*0.5);
 
-  // Morph open: 1-3px only. Larger values are O(r²·N) and freeze the browser.
+  // Morph open: 1-3px only.
   var morphR=Math.min(3, Math.max(1, Math.round((11-sens)*0.3)));
 
   runBtn.disabled=true;
