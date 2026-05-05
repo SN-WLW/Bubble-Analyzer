@@ -632,8 +632,8 @@ function runAnalysis(){
   var blurred=gaussianBlur(gray,canW,canH);
   var binary=adaptiveThreshold(blurred,canW,canH,15,4);
   var opened=morphOpen(binary,canW,canH);
-  var closed=morphClose(opened,canW,canH);
-  var lab=connectedComponents(closed,canW,canH);
+  var filled=fillHoles(opened,canW,canH);
+  var lab=connectedComponents(filled,canW,canH);
   var bubbles=measureComponents(lab.labels,lab.count,canW,canH,analysisPixPerMm,srcX,srcY,scale);
   showResults(bubbles);
   drawAnnotated(bubbles,srcX,srcY,srcW,srcH);
@@ -659,20 +659,42 @@ function morphOpen(bin,w,h){
   for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){if(er[y*w+x]||er[(y-1)*w+x]||er[(y+1)*w+x]||er[y*w+x-1]||er[y*w+x+1])op[y*w+x]=1;}
   return op;
 }
-// morphClose: dilation then erosion — fills holes inside ring-shaped blobs
-// This allows the algorithm to measure the full outer diameter of bubble rings
-// rather than just the dark ring wall pixels
-function morphClose(bin,w,h){
-  var dil=new Uint8Array(w*h),cl=new Uint8Array(w*h);
-  // Dilation — expand dark regions to fill interior gaps
-  for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){
-    if(bin[y*w+x]||bin[(y-1)*w+x]||bin[(y+1)*w+x]||bin[y*w+x-1]||bin[y*w+x+1])dil[y*w+x]=1;
+// fillHoles: flood-fill from all border pixels to find background connected to edge.
+// Any background pixel NOT reachable from the border is inside a closed ring — fill it.
+// This correctly measures full outer diameter of ring-shaped bubbles regardless of ring width.
+function fillHoles(bin,w,h){
+  var out=new Uint8Array(bin);
+  // Mark background reachable from border using BFS
+  var visited=new Uint8Array(w*h);
+  var queue=[];
+  // Seed from all 4 border edges
+  for(var x=0;x<w;x++){
+    if(!bin[0*w+x]&&!visited[0*w+x]){visited[0*w+x]=1;queue.push(0*w+x);}
+    if(!bin[(h-1)*w+x]&&!visited[(h-1)*w+x]){visited[(h-1)*w+x]=1;queue.push((h-1)*w+x);}
   }
-  // Erosion — shrink back to remove spurious expansions at boundaries
-  for(var y=1;y<h-1;y++)for(var x=1;x<w-1;x++){
-    if(dil[y*w+x]&&dil[(y-1)*w+x]&&dil[(y+1)*w+x]&&dil[y*w+x-1]&&dil[y*w+x+1])cl[y*w+x]=1;
+  for(var y=0;y<h;y++){
+    if(!bin[y*w+0]&&!visited[y*w+0]){visited[y*w+0]=1;queue.push(y*w+0);}
+    if(!bin[y*w+w-1]&&!visited[y*w+w-1]){visited[y*w+w-1]=1;queue.push(y*w+w-1);}
   }
-  return cl;
+  // BFS flood fill
+  var qi=0;
+  while(qi<queue.length){
+    var idx=queue[qi++];
+    var px=idx%w, py=Math.floor(idx/w);
+    var nbrs=[idx-1,idx+1,idx-w,idx+w];
+    for(var n=0;n<4;n++){
+      var ni=nbrs[n];
+      if(ni<0||ni>=w*h)continue;
+      var nx2=ni%w;
+      if(Math.abs(nx2-px)>1)continue; // prevent wrap
+      if(!bin[ni]&&!visited[ni]){visited[ni]=1;queue.push(ni);}
+    }
+  }
+  // Any background pixel not visited from border is enclosed — fill it
+  for(var i=0;i<w*h;i++){
+    if(!bin[i]&&!visited[i])out[i]=1;
+  }
+  return out;
 }
 function connectedComponents(bin,w,h){
   var lab=new Int32Array(w*h),lbl=0,stk=[];
