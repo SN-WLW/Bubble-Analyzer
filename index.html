@@ -256,9 +256,12 @@ if('serviceWorker' in navigator) {
     </div>
     <div class="input-group" style="grid-column:1/-1">
       <label>Image colour</label>
-      <div style="display:flex;gap:10px;margin-top:6px">
-        <button id="monoOff" onclick="setMonochrome(false)" style="flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600">🎨 Colour<br><span style="font-size:11px;font-weight:400;color:#555">Keep original colours</span></button>
-        <button id="monoOn" onclick="setMonochrome(true)" style="flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">⬛ Monochrome<br><span style="font-size:11px;font-weight:400;color:#555">Convert to greyscale for cleaner detection</span></button>
+      <div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap">
+        <button id="monoOff" onclick="setMonochrome('colour')" style="flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600">🎨 Colour<br><span style="font-size:11px;font-weight:400;color:#555">Original</span></button>
+        <button id="monoOn" onclick="setMonochrome('mono')" style="flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">⬛ Monochrome<br><span style="font-size:11px;font-weight:400;color:#555">Greyscale average</span></button>
+        <button id="monoGreen" onclick="setMonochrome('green')" style="flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">🟢 Green channel<br><span style="font-size:11px;font-weight:400;color:#555">Best for milk froth</span></button>
+        <button id="monoRed" onclick="setMonochrome('red')" style="flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">🔴 Red channel<br><span style="font-size:11px;font-weight:400;color:#555">Try if green fails</span></button>
+        <button id="monoBlue" onclick="setMonochrome('blue')" style="flex:1;min-width:120px;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">🔵 Blue channel<br><span style="font-size:11px;font-weight:400;color:#555">Try if green fails</span></button>
       </div>
     </div>
   </div>
@@ -338,7 +341,7 @@ var pxPerMmRim=null, pxPerMmFroth=null, cameraHeightMm=null, zDepthMm=null, liqu
 var lastStats=null;
 var historyLog=[];
 var imgPolarity='normal';   // 'normal' | 'invert'
-var imgMonochrome=false;    // true = convert to greyscale before display
+var imgMonochrome='colour'; // 'colour' | 'mono' | 'green' | 'red' | 'blue'
 
 // ── Polarity toggle ───────────────────────────────────────────────────────────
 function setPolarity(p){
@@ -355,18 +358,20 @@ function setPolarity(p){
   if(img) redraw();
 }
 
-// ── Monochrome toggle ─────────────────────────────────────────────────────────
-function setMonochrome(on){
-  imgMonochrome=on;
-  var btnOn=document.getElementById('monoOn');
-  var btnOff=document.getElementById('monoOff');
-  if(on){
-    btnOn.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600';
-    btnOff.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
-  }else{
-    btnOff.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600';
-    btnOn.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
-  }
+// ── Monochrome / channel toggle ───────────────────────────────────────────────
+function setMonochrome(mode){
+  imgMonochrome=mode;
+  var ids=['monoOff','monoOn','monoGreen','monoRed','monoBlue'];
+  var vals=['colour','mono','green','red','blue'];
+  ids.forEach(function(id,i){
+    var btn=document.getElementById(id);
+    if(!btn)return;
+    if(vals[i]===mode){
+      btn.style.borderColor='#3a5a90'; btn.style.background='#1a2a3a'; btn.style.color='#6a9af5';
+    }else{
+      btn.style.borderColor='#444'; btn.style.background='#1a1a1a'; btn.style.color='#666';
+    }
+  });
   if(img) redraw();
 }
 
@@ -576,12 +581,17 @@ function showCorrBox(){
 function redraw(){
   ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
 
-  // Apply monochrome to canvas preview if enabled
-  if(imgMonochrome){
+  // Apply channel/monochrome filter to canvas preview
+  if(imgMonochrome!=='colour'){
     var id=ctx.getImageData(0,0,imgCanvas.width,imgCanvas.height);
     var d=id.data;
     for(var i=0;i<imgCanvas.width*imgCanvas.height;i++){
-      var lum=Math.round(0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2]);
+      var r=d[i*4], g=d[i*4+1], b=d[i*4+2];
+      var lum;
+      if(imgMonochrome==='green')      lum=g;
+      else if(imgMonochrome==='red')   lum=r;
+      else if(imgMonochrome==='blue')  lum=b;
+      else                             lum=Math.round(0.299*r+0.587*g+0.114*b);
       d[i*4]=d[i*4+1]=d[i*4+2]=lum;
     }
     ctx.putImageData(id,0,0);
@@ -595,10 +605,25 @@ function redraw(){
     ctx.save();
     ctx.fillStyle='rgba(0,0,0,.5)';
     ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
-    // roi in image pixels; drawImage source=image pixels, dest=canvas pixels
+    // Draw ROI from original image
     ctx.drawImage(img,
-      roi.x,       roi.y,       roi.w,       roi.h,      // source: image pixels
-      roi.x*cx,    roi.y*cy,    roi.w*cx,    roi.h*cy);  // dest:   canvas pixels
+      roi.x,       roi.y,       roi.w,       roi.h,
+      roi.x*cx,    roi.y*cy,    roi.w*cx,    roi.h*cy);
+    // Apply same channel filter to the ROI area so it matches the full image preview
+    if(imgMonochrome!=='colour'){
+      var roiId=ctx.getImageData(roi.x*cx, roi.y*cy, roi.w*cx, roi.h*cy);
+      var rd=roiId.data;
+      for(var i=0;i<rd.length/4;i++){
+        var r=rd[i*4], g=rd[i*4+1], b=rd[i*4+2];
+        var lum;
+        if(imgMonochrome==='green')      lum=g;
+        else if(imgMonochrome==='red')   lum=r;
+        else if(imgMonochrome==='blue')  lum=b;
+        else                             lum=Math.round(0.299*r+0.587*g+0.114*b);
+        rd[i*4]=rd[i*4+1]=rd[i*4+2]=lum;
+      }
+      ctx.putImageData(roiId, roi.x*cx, roi.y*cy);
+    }
     ctx.strokeStyle='#f5c842'; ctx.lineWidth=2; ctx.setLineDash([6,3]);
     ctx.strokeRect(roi.x*cx, roi.y*cy, roi.w*cx, roi.h*cy);
     ctx.setLineDash([]);
@@ -686,18 +711,16 @@ function runAnalysis(){
   var id=oc.getImageData(0,0,canW,canH);
   var data=id.data;
 
-  // Apply monochrome conversion if enabled (luminance-weighted greyscale)
-  if(imgMonochrome){
-    for(var i=0;i<canW*canH;i++){
-      var lum=Math.round(0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2]);
-      data[i*4]=data[i*4+1]=data[i*4+2]=lum;
-    }
-  }
-
-  // Build greyscale array, applying polarity inversion if enabled
+  // Extract greyscale based on selected channel mode
   var gray=new Uint8Array(canW*canH);
   for(var i=0;i<canW*canH;i++){
-    var lum=Math.round(0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2]);
+    var r=data[i*4], g=data[i*4+1], b=data[i*4+2];
+    var lum;
+    if(imgMonochrome==='green')       lum=g;
+    else if(imgMonochrome==='red')    lum=r;
+    else if(imgMonochrome==='blue')   lum=b;
+    else if(imgMonochrome==='mono')   lum=Math.round(0.299*r+0.587*g+0.114*b);
+    else                              lum=Math.round(0.299*r+0.587*g+0.114*b);
     gray[i]=imgPolarity==='invert'?(255-lum):lum;
   }
 
