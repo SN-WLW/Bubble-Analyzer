@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.1</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.2</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -246,6 +246,20 @@ if('serviceWorker' in navigator) {
     <div class="input-group">
       <label>Max bubble size (mm) <span style="color:#555;font-weight:400">— filter out larger</span></label>
       <input type="number" id="maxBubbleMm" placeholder="e.g. 3.0" min="0.1" step="0.1" value="3.0">
+    </div>
+    <div class="input-group" style="grid-column:1/-1">
+      <label>Image polarity</label>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <button id="polarityNormal" onclick="setPolarity('normal')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600">⚫ Dark bubbles on light background<br><span style="font-size:11px;font-weight:400;color:#555">Standard (phone camera, printed targets)</span></button>
+        <button id="polarityInvert" onclick="setPolarity('invert')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">⚪ Light bubbles on dark background<br><span style="font-size:11px;font-weight:400;color:#555">Microscope bright-field images</span></button>
+      </div>
+    </div>
+    <div class="input-group" style="grid-column:1/-1">
+      <label>Image colour</label>
+      <div style="display:flex;gap:10px;margin-top:6px">
+        <button id="monoOff" onclick="setMonochrome(false)" style="flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600">🎨 Colour<br><span style="font-size:11px;font-weight:400;color:#555">Keep original colours</span></button>
+        <button id="monoOn" onclick="setMonochrome(true)" style="flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">⬛ Monochrome<br><span style="font-size:11px;font-weight:400;color:#555">Convert to greyscale for cleaner detection</span></button>
+      </div>
     </div>
   </div>
   <div class="correction-box" id="correctionBox"></div>
@@ -323,6 +337,38 @@ var roiDragging=false, roiStart=null, roiCurrent=null;
 var pxPerMmRim=null, pxPerMmFroth=null, cameraHeightMm=null, zDepthMm=null, liquidHeightMm=null;
 var lastStats=null;
 var historyLog=[];
+var imgPolarity='normal';   // 'normal' | 'invert'
+var imgMonochrome=false;    // true = convert to greyscale before display
+
+// ── Polarity toggle ───────────────────────────────────────────────────────────
+function setPolarity(p){
+  imgPolarity=p;
+  var btnN=document.getElementById('polarityNormal');
+  var btnI=document.getElementById('polarityInvert');
+  if(p==='normal'){
+    btnN.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600';
+    btnI.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
+  }else{
+    btnI.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #c07a30;background:#2a1a00;color:#f5a05a;font-size:13px;cursor:pointer;font-weight:600';
+    btnN.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
+  }
+  if(img) redraw();
+}
+
+// ── Monochrome toggle ─────────────────────────────────────────────────────────
+function setMonochrome(on){
+  imgMonochrome=on;
+  var btnOn=document.getElementById('monoOn');
+  var btnOff=document.getElementById('monoOff');
+  if(on){
+    btnOn.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600';
+    btnOff.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
+  }else{
+    btnOff.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600';
+    btnOn.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
+  }
+  if(img) redraw();
+}
 
 var imgCanvas=document.getElementById('imgCanvas'), ctx=imgCanvas.getContext('2d');
 var rimMmInput=document.getElementById('rimMmInput');
@@ -529,6 +575,18 @@ function showCorrBox(){
 // ── Redraw ────────────────────────────────────────────────────────────────────
 function redraw(){
   ctx.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
+
+  // Apply monochrome to canvas preview if enabled
+  if(imgMonochrome){
+    var id=ctx.getImageData(0,0,imgCanvas.width,imgCanvas.height);
+    var d=id.data;
+    for(var i=0;i<imgCanvas.width*imgCanvas.height;i++){
+      var lum=Math.round(0.299*d[i*4]+0.587*d[i*4+1]+0.114*d[i*4+2]);
+      d[i*4]=d[i*4+1]=d[i*4+2]=lum;
+    }
+    ctx.putImageData(id,0,0);
+  }
+
   // All coords are in image pixel space — convert to canvas pixels for drawing
   var cx=imgCanvas.width /img.width;
   var cy=imgCanvas.height/img.height;
@@ -625,9 +683,23 @@ function runAnalysis(){
   var off=document.createElement('canvas'); off.width=canW; off.height=canH;
   var oc=off.getContext('2d');
   oc.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, canW, canH);
-  var id=oc.getImageData(0,0,canW,canH).data;
+  var id=oc.getImageData(0,0,canW,canH);
+  var data=id.data;
+
+  // Apply monochrome conversion if enabled (luminance-weighted greyscale)
+  if(imgMonochrome){
+    for(var i=0;i<canW*canH;i++){
+      var lum=Math.round(0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2]);
+      data[i*4]=data[i*4+1]=data[i*4+2]=lum;
+    }
+  }
+
+  // Build greyscale array, applying polarity inversion if enabled
   var gray=new Uint8Array(canW*canH);
-  for(var i=0;i<canW*canH;i++) gray[i]=Math.round(0.299*id[i*4]+0.587*id[i*4+1]+0.114*id[i*4+2]);
+  for(var i=0;i<canW*canH;i++){
+    var lum=Math.round(0.299*data[i*4]+0.587*data[i*4+1]+0.114*data[i*4+2]);
+    gray[i]=imgPolarity==='invert'?(255-lum):lum;
+  }
 
   var blurred=gaussianBlur(gray,canW,canH);
   var binary=adaptiveThreshold(blurred,canW,canH,15,4);
