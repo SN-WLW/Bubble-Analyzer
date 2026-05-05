@@ -178,7 +178,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.7</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.9</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -259,10 +259,13 @@ if('serviceWorker' in navigator) {
       <input type="number" id="minCircularity" placeholder="e.g. 0.5" min="0.1" max="1.0" step="0.05" value="0.5">
     </div>
     <div class="input-group" style="grid-column:1/-1">
-      <label>Image polarity</label>
-      <div style="display:flex;gap:10px;margin-top:6px">
-        <button id="polarityNormal" onclick="setPolarity('normal')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600">⚫ Dark bubbles on light background<br><span style="font-size:11px;font-weight:400;color:#555">Standard (phone camera, printed targets)</span></button>
-        <button id="polarityInvert" onclick="setPolarity('invert')" style="flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600">⚪ Light bubbles on dark background<br><span style="font-size:11px;font-weight:400;color:#555">Microscope bright-field images</span></button>
+      <label>Image colours</label>
+      <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
+        <span id="polarityLabelNormal" style="font-size:13px;color:#a0c4f8;font-weight:600;transition:color .2s;white-space:nowrap">Original</span>
+        <div id="polaritySwitch" onclick="setPolarity(imgPolarity==='normal'?'invert':'normal')" style="position:relative;width:48px;height:26px;border-radius:13px;background:#1a2a3a;border:1.5px solid #3a5a90;cursor:pointer;flex-shrink:0;transition:background .25s,border-color .25s">
+          <div id="polarityKnob" style="position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#6a9af5;transition:transform .25s,background .25s"></div>
+        </div>
+        <span id="polarityLabelInvert" style="font-size:13px;color:#555;transition:color .2s;white-space:nowrap">Inverted colours</span>
       </div>
     </div>
     <div class="input-group" style="grid-column:1/-1">
@@ -357,14 +360,20 @@ var imgMonochrome='colour'; // 'colour' | 'mono' | 'green' | 'red' | 'blue'
 // ── Polarity toggle ───────────────────────────────────────────────────────────
 function setPolarity(p){
   imgPolarity=p;
-  var btnN=document.getElementById('polarityNormal');
-  var btnI=document.getElementById('polarityInvert');
+  var knob=document.getElementById('polarityKnob');
+  var sw=document.getElementById('polaritySwitch');
+  var lblN=document.getElementById('polarityLabelNormal');
+  var lblI=document.getElementById('polarityLabelInvert');
   if(p==='normal'){
-    btnN.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #3a5a90;background:#1a2a3a;color:#6a9af5;font-size:13px;cursor:pointer;font-weight:600';
-    btnI.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
+    knob.style.transform='translateX(0)'; knob.style.background='#6a9af5';
+    sw.style.background='#1a2a3a'; sw.style.borderColor='#3a5a90';
+    lblN.style.color='#a0c4f8'; lblN.style.fontWeight='600';
+    lblI.style.color='#555'; lblI.style.fontWeight='400';
   }else{
-    btnI.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #c07a30;background:#2a1a00;color:#f5a05a;font-size:13px;cursor:pointer;font-weight:600';
-    btnN.style.cssText='flex:1;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#666;font-size:13px;cursor:pointer;font-weight:600';
+    knob.style.transform='translateX(22px)'; knob.style.background='#f5a05a';
+    sw.style.background='#2a1a00'; sw.style.borderColor='#c07a30';
+    lblN.style.color='#555'; lblN.style.fontWeight='400';
+    lblI.style.color='#f5a05a'; lblI.style.fontWeight='600';
   }
   if(img) redraw();
 }
@@ -823,8 +832,27 @@ function gaussianBlurR(gray,w,h,r){
 // Legacy small fixed blur
 function gaussianBlur(gray,w,h){return gaussianBlurR(gray,w,h,2);}
 function adaptiveThreshold(gray,w,h,bs,C){
-  var half=Math.floor(bs/2),bin=new Uint8Array(w*h);
-  for(var y=0;y<h;y++)for(var x=0;x<w;x++){var s=0,c=0;for(var dy=-half;dy<=half;dy++)for(var dx=-half;dx<=half;dx++){var ny=y+dy,nx=x+dx;if(ny>=0&&ny<h&&nx>=0&&nx<w){s+=gray[ny*w+nx];c++;}}bin[y*w+x]=(gray[y*w+x]<s/c-C)?1:0;}
+  // Fast O(W*H) implementation using a 2-pass integral image (summed area table).
+  // This replaces the O(blockPx^2 * W * H) naive nested loop which froze on large images.
+  var half=Math.floor(bs/2);
+  // Build integral image
+  var sat=new Float64Array(w*h);
+  for(var y=0;y<h;y++){
+    for(var x=0;x<w;x++){
+      var v=gray[y*w+x];
+      sat[y*w+x]=v+(x>0?sat[y*w+x-1]:0)+(y>0?sat[(y-1)*w+x]:0)-(x>0&&y>0?sat[(y-1)*w+x-1]:0);
+    }
+  }
+  var bin=new Uint8Array(w*h);
+  for(var y=0;y<h;y++){
+    for(var x=0;x<w;x++){
+      var x1=Math.max(0,x-half), y1=Math.max(0,y-half);
+      var x2=Math.min(w-1,x+half), y2=Math.min(h-1,y+half);
+      var count=(x2-x1+1)*(y2-y1+1);
+      var s=sat[y2*w+x2]-(x1>0?sat[y2*w+x1-1]:0)-(y1>0?sat[(y1-1)*w+x2]:0)+(x1>0&&y1>0?sat[(y1-1)*w+x1-1]:0);
+      bin[y*w+x]=(gray[y*w+x]<s/count-C)?1:0;
+    }
+  }
   return bin;
 }
 function morphOpenR(bin,w,h,r){
