@@ -179,7 +179,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.20</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.21</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -748,16 +748,11 @@ function runAnalysis(){
   var id=oc.getImageData(0,0,canW,canH);
   var data=id.data;
 
-  // Extract greyscale based on selected channel mode
+  // Extract greyscale (standard luminance)
   var gray=new Float32Array(canW*canH);
   for(var i=0;i<canW*canH;i++){
     var r=data[i*4], g=data[i*4+1], b=data[i*4+2];
-    var lum;
-    if(imgMonochrome==='green')       lum=g;
-    else if(imgMonochrome==='red')    lum=r;
-    else if(imgMonochrome==='blue')   lum=b;
-    else lum=0.299*r+0.587*g+0.114*b;
-    gray[i]=imgPolarity==='invert'?(255-lum):lum;
+    gray[i]=0.299*r+0.587*g+0.114*b;
   }
 
   var sens=parseInt(document.getElementById('sensitivitySlider').value)||5;
@@ -1095,7 +1090,7 @@ function measureComponents(lab,count,w,h,pxPerMm,offX,offY,scale){
   scale=scale||1;
   var minMm=parseFloat(document.getElementById('minBubbleMm').value)||0.05;
   var maxMm=parseFloat(document.getElementById('maxBubbleMm').value)||3.0;
-  var minCirc=parseFloat(document.getElementById('minCircularity').value)||0.5;
+  var minCirc=0.5; // circularity filter removed — not used in current detector
   var minAreaPx = Math.PI * Math.pow((minMm * pxPerMm / 2), 2);
   var maxAreaPx = Math.PI * Math.pow((maxMm * pxPerMm / 2), 2);
   var areas=new Float32Array(count+1),sx=new Float32Array(count+1),sy=new Float32Array(count+1);
@@ -1301,24 +1296,14 @@ function drawAnnotated(bubbles,srcX,srcY,srcW,srcH){
   var oc=document.getElementById('outCanvas');oc.width=img.width;oc.height=img.height;
   var c=oc.getContext('2d');c.drawImage(img,0,0);
 
-  // Apply same channel/polarity filter as the main canvas preview
-  if(imgMonochrome!=='colour'||imgPolarity==='invert'){
-    var id=c.getImageData(0,0,img.width,img.height);
-    var d=id.data;
-    for(var i=0;i<img.width*img.height;i++){
-      var r=d[i*4], g=d[i*4+1], b=d[i*4+2];
-      var lum;
-      if(imgMonochrome==='green')      lum=g;
-      else if(imgMonochrome==='red')   lum=r;
-      else if(imgMonochrome==='blue')  lum=b;
-      else                             lum=Math.round(0.299*r+0.587*g+0.114*b);
-      if(imgPolarity==='invert') lum=255-lum;
-      if(imgMonochrome!=='colour'){ d[i*4]=d[i*4+1]=d[i*4+2]=lum; }
-      else if(imgPolarity==='invert'){ // invert colour channels individually
-        d[i*4]=255-r; d[i*4+1]=255-g; d[i*4+2]=255-b;
-      }
-    }
-    c.putImageData(id,0,0);
+  // Apply contrast/sharpness to annotated output to match what was analysed
+  var _cAdj=parseInt((document.getElementById('contrastSlider')||{value:0}).value)||0;
+  var _sAdj=parseInt((document.getElementById('sharpnessSlider')||{value:0}).value)||0;
+  if(_cAdj!==0||_sAdj!==0){
+    var _id=c.getImageData(0,0,img.width,img.height);
+    if(_cAdj!==0) applyContrastLUT(_id.data,_cAdj);
+    if(_sAdj!==0) applySharpnessRGBA(_id.data,img.width,img.height,1.5,_sAdj>0?_sAdj*0.4:_sAdj*0.6);
+    c.putImageData(_id,0,0);
   }
 
   if(roi){
