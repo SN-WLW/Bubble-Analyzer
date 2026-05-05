@@ -179,7 +179,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.21</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.23</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -1307,9 +1307,12 @@ function drawAnnotated(bubbles,srcX,srcY,srcW,srcH){
   }
 
   if(roi){
-    c.save();c.fillStyle='rgba(0,0,0,.42)';c.fillRect(0,0,img.width,img.height);
-    // Redraw ROI region from filtered canvas data
-    c.drawImage(oc,srcX,srcY,srcW,srcH,srcX,srcY,srcW,srcH);
+    // Snapshot the ROI pixels BEFORE darkening (same fix as redraw())
+    var roiSnap=c.getImageData(srcX,srcY,srcW,srcH);
+    c.save();
+    c.fillStyle='rgba(0,0,0,.42)';
+    c.fillRect(0,0,img.width,img.height);
+    c.putImageData(roiSnap,srcX,srcY);
     c.strokeStyle='#f5c842';c.lineWidth=Math.max(1,img.width/500);c.setLineDash([8,4]);
     c.strokeRect(srcX,srcY,srcW,srcH);c.setLineDash([]);
     c.font='bold '+Math.max(11,Math.round(img.width/80))+'px system-ui';
@@ -1335,21 +1338,29 @@ function saveResult(){
   var label=document.getElementById('saveLabel').value.trim();
   if(!label)label='Dataset '+(historyLog.length+1);
 
-  // Build reference image from the original full-res source so it matches
-  // the annotated output (which is also drawn at img.width x img.height).
-  // Previously this used imgCanvas which is scaled to the display window.
+  var _cAdj=parseInt((document.getElementById('contrastSlider')||{value:0}).value)||0;
+  var _sAdj=parseInt((document.getElementById('sharpnessSlider')||{value:0}).value)||0;
+
+  // Build reference image — apply same contrast/sharpness as analysis used
   var refCan=document.createElement('canvas');
   refCan.width=img.width; refCan.height=img.height;
   var rc=refCan.getContext('2d');
   rc.drawImage(img,0,0);
+  if(_cAdj!==0||_sAdj!==0){
+    var _id=rc.getImageData(0,0,img.width,img.height);
+    if(_cAdj!==0) applyContrastLUT(_id.data,_cAdj);
+    if(_sAdj!==0) applySharpnessRGBA(_id.data,img.width,img.height,1.5,_sAdj>0?_sAdj*0.4:_sAdj*0.6);
+    rc.putImageData(_id,0,0);
+  }
 
-  // Draw ROI overlay at full-res scale (mirrors drawAnnotated logic exactly)
+  // ROI overlay — snapshot adjusted pixels before dimming (same pattern as redraw/drawAnnotated)
   if(roi){
     var lw=Math.max(1,img.width/500);
+    var roiSnap=rc.getImageData(roi.x,roi.y,roi.w,roi.h);
     rc.save();
     rc.fillStyle='rgba(0,0,0,.42)';
     rc.fillRect(0,0,img.width,img.height);
-    rc.drawImage(img,roi.x,roi.y,roi.w,roi.h,roi.x,roi.y,roi.w,roi.h);
+    rc.putImageData(roiSnap,roi.x,roi.y);
     rc.strokeStyle='#f5c842'; rc.lineWidth=lw;
     rc.setLineDash([8,4]); rc.strokeRect(roi.x,roi.y,roi.w,roi.h); rc.setLineDash([]);
     rc.font='bold '+Math.max(11,Math.round(img.width/80))+'px system-ui';
