@@ -179,7 +179,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.19</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.20</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -650,33 +650,22 @@ function redraw(){
   var cy=imgCanvas.height/img.height;
 
   if(roi){
+    // Snapshot the already contrast/sharpness-adjusted canvas before dimming
+    var roiCanX=Math.round(roi.x*cx), roiCanY=Math.round(roi.y*cy);
+    var roiCanW=Math.round(roi.w*cx), roiCanH=Math.round(roi.h*cy);
+    var adjustedRoi=ctx.getImageData(roiCanX, roiCanY, roiCanW, roiCanH);
+
     ctx.save();
+    // Dim the whole canvas
     ctx.fillStyle='rgba(0,0,0,.5)';
     ctx.fillRect(0,0,imgCanvas.width,imgCanvas.height);
-    // Draw ROI from original image
-    ctx.drawImage(img,
-      roi.x,       roi.y,       roi.w,       roi.h,
-      roi.x*cx,    roi.y*cy,    roi.w*cx,    roi.h*cy);
-    // Apply same channel filter to the ROI area so it matches the full image preview
-    if(imgMonochrome!=='colour'){
-      var roiId=ctx.getImageData(roi.x*cx, roi.y*cy, roi.w*cx, roi.h*cy);
-      var rd=roiId.data;
-      for(var i=0;i<rd.length/4;i++){
-        var r=rd[i*4], g=rd[i*4+1], b=rd[i*4+2];
-        var lum;
-        if(imgMonochrome==='green')      lum=g;
-        else if(imgMonochrome==='red')   lum=r;
-        else if(imgMonochrome==='blue')  lum=b;
-        else                             lum=Math.round(0.299*r+0.587*g+0.114*b);
-        rd[i*4]=rd[i*4+1]=rd[i*4+2]=lum;
-      }
-      ctx.putImageData(roiId, roi.x*cx, roi.y*cy);
-    }
+    // Restore the adjusted ROI pixels (not the original img)
+    ctx.putImageData(adjustedRoi, roiCanX, roiCanY);
     ctx.strokeStyle='#f5c842'; ctx.lineWidth=2; ctx.setLineDash([6,3]);
-    ctx.strokeRect(roi.x*cx, roi.y*cy, roi.w*cx, roi.h*cy);
+    ctx.strokeRect(roiCanX, roiCanY, roiCanW, roiCanH);
     ctx.setLineDash([]);
     ctx.font='bold 11px system-ui'; ctx.fillStyle='#f5c842';
-    ctx.fillText('SAMPLE REGION', roi.x*cx+6, roi.y*cy+14);
+    ctx.fillText('SAMPLE REGION', roiCanX+6, roiCanY+14);
     ctx.restore();
   }
 
