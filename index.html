@@ -179,7 +179,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.17</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.18</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -737,26 +737,22 @@ function runAnalysis(){
   }
 
   // Apply sharpness: unsharp mask (positive) or blur (negative)
+  // Uses the fast separable boxBlur already in the codebase — not a nested loop.
   if(sharpAdj!==0){
-    var blurR=Math.abs(sharpAdj);
-    var blurred2=new Float32Array(gray.length);
-    // Simple box blur for unsharp mask base
-    for(var y=0;y<canH;y++)for(var x=0;x<canW;x++){
-      var s=0,c=0;
-      for(var dy=-blurR;dy<=blurR;dy++)for(var dx=-blurR;dx<=blurR;dx++){
-        var ny=y+dy,nx=x+dx;
-        if(ny>=0&&ny<canH&&nx>=0&&nx<canW){s+=gray[ny*canW+nx];c++;}
-      }
-      blurred2[y*canW+x]=s/c;
-    }
+    // Blur radius scales with image resolution so effect is visible at any scale
+    var sharpBlurR=Math.round(analysisPixPerMm*0.08);  // ~5px per mm
+    sharpBlurR=Math.max(2,Math.min(20,sharpBlurR));
+    var blurred2=boxBlur(gray,canW,canH,sharpBlurR);
     if(sharpAdj>0){
-      // Unsharp mask: original + amount*(original - blurred)
-      var amount=sharpAdj*0.6;
+      // Unsharp mask: sharpen by adding scaled difference between original and blurred
+      var amount=sharpAdj*0.5;
       for(var i=0;i<gray.length;i++)
         gray[i]=Math.max(0,Math.min(255, gray[i]+amount*(gray[i]-blurred2[i])));
-    } else {
-      // Blur: replace with blurred version
-      for(var i=0;i<gray.length;i++) gray[i]=blurred2[i];
+    }else{
+      // Blur: blend toward blurred version by slider amount
+      var blend=Math.abs(sharpAdj)/5;
+      for(var i=0;i<gray.length;i++)
+        gray[i]=gray[i]*(1-blend)+blurred2[i]*blend;
     }
   }
 
