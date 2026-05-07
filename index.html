@@ -179,7 +179,7 @@ if('serviceWorker' in navigator) {
 </head>
 <body>
 
-<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.23</span></h1>
+<h1>Bubble Size Analyzer <span style="font-size:11px;color:#444;font-weight:400;margin-left:6px">v2.24</span></h1>
 <p class="subtitle">Top-down photography — perspective-corrected for cup rim reference + froth depth offset.</p>
 
 <!-- Install banner (shown when installable) -->
@@ -814,12 +814,11 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
   // Step 1: Light smoothing to suppress sub-pixel noise
   var smoothed=boxBlur(gray,w,h,1.5);
 
-  // Step 2: Estimate local background with a moderate blur.
-  // Must be large enough to span a bubble but small enough to track
-  // local density in dense bubble fields (0.3mm sweet spot).
-  // Using ~0.8mm was too large — in dense regions it averaged over many
-  // bubbles, making each individual bubble invisible above "background".
-  var bgSigma=Math.max(4, pxPerMm*0.3);
+  // Background estimation window.
+  // Must be larger than the largest bubble radius to keep bg estimate in
+  // the surrounding background (not inside the bubble itself).
+  // Scales with maxBubbleMm so large circles stay detectable.
+  var bgSigma=Math.max(0.3, maxMm*0.7)*pxPerMm;
   var bg=boxBlur(gray,w,h,bgSigma);
 
   // Contrast = how much brighter each pixel is than its local neighbourhood
@@ -836,43 +835,42 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
   var thresh=contrastStd*(1.5-(sens-1)*0.12);
   thresh=Math.max(contrastStd*0.3, thresh);
 
-  // Step 3: Find local maxima within a window = min bubble diameter
+  // Step 3: Detect both bright-on-dark AND dark-on-bright blobs.
+  // Froth images have bright bubbles; calibration targets and some microscope
+  // images have dark circles on light backgrounds. abs(contrast) handles both.
   var winR=Math.max(2,Math.round(minRpx));
   var peaks=[];
   for(var y=winR;y<h-winR;y++){
     for(var x=winR;x<w-winR;x++){
-      if(contrast[y*w+x]<thresh)continue;
-      // Check this is the brightest in its window
+      var absC=contrast[y*w+x]>0?contrast[y*w+x]:-contrast[y*w+x];
+      if(absC<thresh)continue;
       var v=smoothed[y*w+x];
+      var dark=contrast[y*w+x]<0; // dark blob on bright bg
       var isMax=true;
       outer:for(var dy=-winR;dy<=winR;dy++){
         for(var dx=-winR;dx<=winR;dx++){
           if(dy===0&&dx===0)continue;
-          if(smoothed[(y+dy)*w+(x+dx)]>=v){isMax=false;break outer;}
+          // For bright blobs: find brightness maxima; for dark: find minima
+          if(!dark&&smoothed[(y+dy)*w+(x+dx)]>=v){isMax=false;break outer;}
+          if(dark&&smoothed[(y+dy)*w+(x+dx)]<=v){isMax=false;break outer;}
         }
       }
-      if(isMax)peaks.push({x:x,y:y,v:v,c:contrast[y*w+x]});
+      if(isMax)peaks.push({x:x,y:y,v:v,c:absC,dark:dark});
     }
   }
 
   // Step 4: For each peak, recentre + estimate radius from radial intensity falloff
-  var angles=[0,0.524,1.047,1.571,2.094,2.618,3.14,3.665,4.189,4.712,5.236,5.76]; // 12 directions
+  var angles=[0,0.524,1.047,1.571,2.094,2.618,3.14,3.665,4.189,4.712,5.236,5.76];
   var results=[];
   for(var pi=0;pi<peaks.length;pi++){
     var pk=peaks[pi];
     var cx=pk.x, cy=pk.y;
-
-    // FIX 1: Use RAW pixel value not smoothed for radius estimation.
-    // Smoothing drops the peak ~10 grey levels, halving apparent contrast
-    // and causing the falloff to be reached too early → undersized circles.
     var bgVal=bg[cy*w+cx];
     var rawPeak=gray[cy*w+cx];
-    var pContrast=rawPeak-bgVal;
+    var pContrast=pk.dark?(bgVal-rawPeak):(rawPeak-bgVal);
     if(pContrast<thresh)continue;
 
-    // FIX 2: Recentre using intensity-weighted centroid.
-    // Local maxima land on specular highlights which are asymmetrically placed
-    // on bubble surfaces. Centroiding corrects to geometric bubble centre.
+    // Recentre using intensity-weighted centroid (direction-aware for dark blobs)
     var searchR=Math.max(3,Math.round(minRpx*2));
     var wsumX=0,wsumY=0,wtot=0;
     for(var dy=-searchR;dy<=searchR;dy++){
@@ -880,18 +878,15 @@ function dogDetect(gray,w,h,pxPerMm,minMm,maxMm,sens,minCirc,offX,offY,scale){
         if(dy*dy+dx*dx>searchR*searchR)continue;
         var ry=cy+dy,rx=cx+dx;
         if(ry>=0&&ry<h&&rx>=0&&rx<w){
-          var wv=Math.max(0,gray[ry*w+rx]-bgVal);
+          var wv=pk.dark?Math.max(0,bgVal-gray[ry*w+rx]):Math.max(0,gray[ry*w+rx]-bgVal);
           wsumX+=rx*wv; wsumY+=ry*wv; wtot+=wv;
         }
       }
     }
     if(wtot>0){cx=Math.round(wsumX/wtot); cy=Math.round(wsumY/wtot);}
 
-    // FIX 3: Use 15% falloff instead of 40%.
-    // These bubbles have a very gradual intensity slope — at 40% the ring mean
-    // is already reached well inside the visible bubble boundary. 15% continues
-    // outward to where the bubble truly blends into background.
-    var halfTarget=bgVal+pContrast*0.15;
+    // Radius from 15% falloff — works for both polarities
+    var halfTarget=pk.dark?(bgVal-pContrast*0.15):(bgVal+pContrast*0.15);
     var foundR=0;
     for(var r=1;r<=maxRpx;r++){
       var ringSum=0,ringN=0;
